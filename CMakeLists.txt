@@ -106,6 +106,16 @@ target_include_directories(imgui_lib SYSTEM PUBLIC
 # imgui_lib inherits its include directory and links against it.
 target_link_libraries(imgui_lib PUBLIC glfw)
 
+# ImGui is delivered to plugins through utsyn_core.dll as a SINGLE shared instance
+# (see the utsyn_core link section for why a second copy crashes). Mark ImGui's API
+# dllexport so its symbols are exported from whichever DLL the imgui objects land in
+# (utsyn_core.dll). WINDOWS_EXPORT_ALL_SYMBOLS does NOT cover symbols pulled from a
+# static lib, so this explicit dllexport is required. PUBLIC so utsyn_core's own TUs
+# that include imgui.h agree on the dllexport linkage.
+if(WIN32)
+    target_compile_definitions(imgui_lib PUBLIC "IMGUI_API=__declspec(dllexport)")
+endif()
+
 # ============================================================
 # ImPlot library target
 # ============================================================
@@ -141,10 +151,14 @@ endif()
 add_library(utsyn_core SHARED
     src/app/Application.cpp
     src/app/LayoutManager.cpp
+    src/app/Logger.cpp
     src/rendering/Viewport.cpp
     src/rendering/ViewportManager.cpp
     src/rendering/SceneManager.cpp
     src/widgets/ViewportPanel.cpp
+    src/widgets/MessageMonitor.cpp
+    src/ros/RosCore.cpp
+    src/ros/SubscriptionRegistry.cpp
     src/plugins/PluginLoader.cpp
 )
 
@@ -164,10 +178,31 @@ target_include_directories(utsyn_core SYSTEM PUBLIC
 
 target_link_libraries(utsyn_core PUBLIC
     threepp
-    imgui_lib
-    implot_lib
     nlohmann_json::nlohmann_json
 )
+
+# ImGui/ImPlot must exist in EXACTLY ONE place. ImGui keeps global state (GImGui)
+# per copy of its code: the app creates the context in utsyn_core, so utsyn_core's
+# GImGui is the only valid one. If a plugin statically linked its own second copy
+# of ImGui, that copy's GImGui would be NULL and the plugin's first ImGui::Begin()
+# would dereference null and crash. So link ImGui/ImPlot PRIVATE — they are NOT
+# propagated to plugins as link inputs. Plugins instead resolve ImGui from
+# utsyn_core's exports (one instance, one context; utsyn_core is SHARED with
+# WINDOWS_EXPORT_ALL_SYMBOLS) and get the headers from the PUBLIC include dirs below.
+target_link_libraries(utsyn_core PRIVATE imgui_lib implot_lib)
+target_include_directories(utsyn_core SYSTEM PUBLIC
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+    ${implot_SOURCE_DIR}
+)
+if(WIN32)
+    # Consumers of utsyn_core (the plugins) import ImGui from utsyn_core.dll.
+    target_compile_definitions(utsyn_core INTERFACE "IMGUI_API=__declspec(dllimport)")
+endif()
+
+# dlopen/dlsym for the plugin loader on Linux; empty string on Windows (LoadLibrary
+# lives in kernel32, linked by default).
+target_link_libraries(utsyn_core PUBLIC ${CMAKE_DL_LIBS})
 target_link_libraries(utsyn_core PRIVATE utsyn_warnings)
 
 if(ROS2_AVAILABLE)
@@ -200,6 +235,38 @@ target_link_libraries(plugin_example PRIVATE utsyn_core utsyn_warnings)
 set_target_properties(plugin_example PROPERTIES
     PREFIX ""   # No "lib" prefix — plugins load by name
 )
+
+# When ROS2 is present, a plugin that calls broker.subscribe<Msg>() instantiates
+# rclcpp::create_subscription<Msg> in its OWN translation unit, so the plugin
+# target must link rclcpp and the message packages directly (it cannot rely on
+# utsyn_core's usage requirements for template instantiation). UTSYN_ROS2 itself
+# propagates from utsyn_core. ExamplePlugin doesn't subscribe yet, but wiring this
+# now keeps the demo plugin (next deliverable) buildable.
+if(ROS2_AVAILABLE)
+    ament_target_dependencies(plugin_example
+        rclcpp std_msgs sensor_msgs geometry_msgs tf2 tf2_ros
+    )
+endif()
+
+# ============================================================
+# Robot monitor demo plugin (topic-monitoring base demo)
+# ============================================================
+add_library(plugin_robot_monitor SHARED
+    plugins/robot_monitor/RobotMonitorPlugin.cpp
+)
+target_link_libraries(plugin_robot_monitor PRIVATE utsyn_core utsyn_warnings)
+set_target_properties(plugin_robot_monitor PROPERTIES
+    PREFIX ""   # No "lib" prefix — plugins load by name
+)
+# This plugin subscribes (broker.subscribe<JointState/String>), so when ROS2 is
+# present it instantiates create_subscription<Msg> in its own TU and must link the
+# message packages directly (UTSYN_ROS2 itself propagates from utsyn_core). ament
+# marks these include dirs SYSTEM, so /W4 /WX is not tripped by rclcpp headers.
+if(ROS2_AVAILABLE)
+    ament_target_dependencies(plugin_robot_monitor
+        rclcpp std_msgs sensor_msgs geometry_msgs tf2 tf2_ros
+    )
+endif()
 
 # ============================================================
 # Assets

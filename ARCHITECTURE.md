@@ -3,7 +3,7 @@
 Current state of the system. Updated at the end of every session that changes structure, interfaces, or data flow.
 This describes what exists, not what is planned.
 
-Last updated: 3D viewport implemented — scene rendered offscreen and embedded in a dockable ImGui panel
+Last updated: ROS/plugin backbone wired — Logger, RosCore (ROS2 lifecycle/thread), SubscriptionBroker (two-layer, with per-topic stats), and PluginLoader are implemented; Application loads plugins and drives their lifecycle. Built and run with ROS2 OFF (UTSYN_ROS2 undefined).
 
 ---
 
@@ -41,10 +41,36 @@ pans, wheel zooms — captured via an InvisibleButton over the image so a drag
 keeps working even if the cursor leaves the panel. This sidesteps threepp's
 `OrbitControls`, which binds to the whole Canvas and would conflict with docking.
 
-The remaining modules exist as **stubs** — header + .cpp are present and compile
-into `utsyn_core`, but their methods are TODO placeholders. **ExamplePlugin** is
-a working reference (full `IPlugin` impl + ImGui panel) but is not yet loaded by
-the app.
+The **ROS/plugin backbone is now wired** (the "plumbing-first" PR). `Application`
+constructs `RosCore`, a `SubscriptionRegistry` + `SubscriptionBroker`, a
+`SceneManager`, and a `PluginLoader`; builds one `PluginContext`; loads every
+`plugin_*.dll` next to the executable; and drives the plugin lifecycle. Each frame
+it runs `broker.pump()` → `onSceneUpdate(dt)` → scene/threepp render →
+`onImGui()`, and on exit performs an ordered `shutdown()` (stop ROS → plugin
+`shutdown()` → clear broker → unload DLLs). **ExamplePlugin is now loaded** and
+logs through the real `Logger`. This was verified end to end with **ROS2 OFF**:
+the plugin loads, renders, and the app exits cleanly (0).
+
+Because ROS2 is optional and was absent at build time, all rclcpp-touching code is
+compiled out behind `#if defined(UTSYN_ROS2) && UTSYN_ROS2`; `RosCore::rosEnabled()`
+is false and topic subscriptions are inert (they report `RosDisabled`). The broker
+stats/queue machinery exists and compiles, but the live receive path only runs when
+ROS2 is present.
+
+The **MessageMonitor widget + a robot_monitor demo plugin (PR2) are now built and
+verified.** `MessageMonitor` renders one collapsible block per topic — the
+always-visible header carries an ASCII status token + topic + rate + age,
+dual-encoded by token and `theme` color; a quiet latched topic reads healthy, not
+stale. A plugin creates rows untyped via `addRow()` (so they render even without
+ROS2) and attaches a real subscription with the header-only `bind<Msg>()`. The
+`RobotMonitorPlugin` watches `/joint_states` and the latched `/robot_description`
+and is the seed of the eventual robot_description plugin. Verified by running with
+ROS2 OFF: both plugins load, the monitor panel renders two `[-OFF-]` rows with the
+expanded TYPE/STATE/RATE/COUNT/LAST/SIZE grid and an editable topic field, and the
+app exits cleanly. The live (ROS2-on) feedback path is still unvalidated.
+
+The still-stubbed modules (`LayoutManager`, `SceneManager`, `TfListener`,
+`TopicPlot`, `TfTree`) have header + .cpp that compile but whose methods are TODO.
 
 Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 
@@ -54,20 +80,28 @@ Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 
 | Module | Location | Status | Purpose |
 |---|---|---|---|
-| Application | src/app/Application | BUILT | Window, ImGui dockspace + terminal style, render loop |
+| Application | src/app/Application | BUILT | Window, ImGui dockspace + terminal style, render loop; wires the ROS/plugin backbone, runs plugin lifecycle, ordered shutdown |
 | LayoutManager | src/app/LayoutManager | STUB | Panel layout persistence (JSON) |
+| Logger | src/app/Logger | BUILT | Thread-safe singleton logger (info/warn/error + ring buffer, mirrors to stderr) |
 | Viewport | src/rendering/Viewport | BUILT | threepp scene + camera, rendered offscreen to a RenderTarget |
 | ViewportManager | src/rendering/ViewportManager | BUILT | Owns and manages all Viewport instances |
 | SceneManager | src/rendering/SceneManager | STUB | Manages 3D scene objects added by plugins |
-| SubscriptionBroker | src/ros/SubscriptionBroker | STUB | ROS2 subscription ownership and deduplication |
+| RosCore | src/ros/RosCore | BUILT | ROS2 lifecycle: rclcpp init, "utsyn" node, SingleThreadedExecutor + spin thread. Inert without ROS2 |
+| TopicStats / StatsCell | src/ros/TopicStats | BUILT | Per-topic stats POD + lock-free published-index double-buffer (ROS→render). rclcpp-free |
+| SpscRing | src/ros/SpscRing | BUILT | Single-producer/single-consumer payload queue (ROS→render). rclcpp-free |
+| ISubscriptionRegistry | src/ros/ISubscriptionRegistry | BUILT | Non-template, ABI-stable core contract for subscriptions. rclcpp-free |
+| SubscriptionBroker | src/ros/SubscriptionBroker | BUILT | Header-only typed facade (subscribe<Msg>/monitor<Msg>) over the registry. This is what PluginContext exposes |
+| SubscriptionRegistry | src/ros/SubscriptionRegistry | BUILT | Concrete registry: dedup + refcount + per-topic StatsCell + drainers + pump()/clear(). rclcpp only in the .cpp |
 | TfListener | src/ros/TfListener | STUB | Consumes tf2, exposes transforms to SceneManager |
-| IPlugin | src/plugins/IPlugin | BUILT | Plugin contract (interface only — fully defined) |
-| PluginLoader | src/plugins/PluginLoader | STUB | Dynamic .so/.dll loading |
+| IPlugin | src/plugins/IPlugin | BUILT | Plugin contract (interface) + UTSYN_PLUGIN_ABI_VERSION sentinel |
+| PluginLoader | src/plugins/PluginLoader | BUILT | Loads plugin_*.dll/.so, resolves entry points, ABI-checks, drives lifecycle, ordered unload |
 | TopicPlot | src/widgets/TopicPlot | STUB | ImPlot-based real-time topic monitor panel |
 | TfTree | src/widgets/TfTree | STUB | TF frame tree panel |
 | ViewportPanel | src/widgets/ViewportPanel | BUILT | ImGui panel embedding a Viewport's render texture |
-| Logger | src/app/Logger | STUB | Singleton logger, thread-safe |
-| ExamplePlugin | plugins/example_plugin | BUILT | Reference plugin — full IPlugin impl, ImGui panel |
+| MessageMonitor | src/widgets/MessageMonitor | BUILT | Reusable per-topic streaming-feedback widget plugins embed (one collapsible block per topic; addRow + bind<Msg>) |
+| Theme | src/app/Theme | BUILT | Named status colors (StatusLive/Stale/Error/Idle) for the terminal palette |
+| ExamplePlugin | plugins/example_plugin | BUILT | Reference plugin — full IPlugin impl + ImGui panel; loaded by the app, logs via Logger |
+| RobotMonitorPlugin | plugins/robot_monitor | BUILT | Demo: monitors /joint_states + /robot_description via MessageMonitor; seed of the robot_description plugin |
 
 Update this table when modules are created or their status changes.
 
@@ -77,57 +111,75 @@ Update this table when modules are created or their status changes.
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ ROS2 Thread                                          │
-│   rclcpp::spin() on dedicated thread                │
+│ ROS2 Thread  (RosCore: SingleThreadedExecutor.spin) │
 │   All topic callbacks land here                     │
 │                                                     │
-│   SubscriptionBroker                                │
+│   SubscriptionRegistry (behind SubscriptionBroker)  │
 │     - owns all rclcpp subscriptions                 │
-│     - plugins request topics through it             │
+│     - plugins request topics through the broker     │
 │     - deduplicates (N plugins, 1 subscription)      │
-│     - pushes messages into per-topic queues         │
+│     - per message: update stats, push payload       │
 └──────────────────────┬──────────────────────────────┘
-                       │ lock-free queues /
-                       │ double-buffered structs
+        payload: SpscRing │ stats: StatsCell
+        (per consumer)    │ (published-index double-buffer)
 ┌──────────────────────▼──────────────────────────────┐
 │ Render Thread                                        │
-│   Fixed render loop (vsync or uncapped)             │
-│                                                     │
-│   Application::tick()                               │
+│   Render loop (vsync), Application::frame()         │
 │     │                                               │
-│     ├── drain queues → plugin callbacks             │
-│     │     └── plugins update their local state      │
+│     ├── broker.pump()                               │
+│     │     └── drain payload queues → plugin cbs     │
 │     │                                               │
-│     ├── SceneManager::update()                      │
-│     │     └── TfListener → scene transforms         │
+│     ├── plugins.onSceneUpdate(dt)                   │
+│     │     └── (later) SceneManager / TfListener     │
 │     │                                               │
-│     ├── threepp render (all Viewports)              │
+│     ├── Viewport.update(dt) + threepp render        │
 │     │                                               │
-│     └── ImGui render                               │
-│           ├── plugin->onImGui() for each plugin     │
-│           ├── built-in panels (TfTree, TopicPlot)  │
-│           └── ViewportPanels (embed threepp views)  │
+│     └── renderUi() / ImGui                          │
+│           ├── status window + ViewportPanel         │
+│           └── plugins.onImGui()  (plugin panels;    │
+│               read TopicStats via the broker)       │
 └─────────────────────────────────────────────────────┘
 ```
 
 **Rule:** Never call rclcpp from the render thread. Never block the render loop.
+Subscription map mutation (acquire/release/pump/clear) is render-thread-only
+(asserted); the ROS thread only writes a live topic's StatsCell/SpscRing.
 
 ---
 
 ## Plugin System
 
 ### Loading
-Plugins are shared libraries (.so on Linux, .dll on Windows).
-PluginLoader opens them with dlopen/LoadLibrary and resolves two symbols:
+Plugins are shared libraries (.so on Linux, .dll on Windows). `PluginLoader`
+scans the executable's directory for `plugin_*.{dll,so}` and, for each, opens it
+with LoadLibrary/dlopen and resolves three symbols:
 ```cpp
 extern "C" utsyn::IPlugin* createPlugin();
-extern "C" void destroyPlugin(utsyn::IPlugin*);
+extern "C" void           destroyPlugin(utsyn::IPlugin*);
+extern "C" int            utsynPluginAbiVersion();   // must == UTSYN_PLUGIN_ABI_VERSION
 ```
+A missing symbol or an ABI-version mismatch is a recoverable error: the loader
+logs and skips the plugin (it does not assert).
 
 ### Lifecycle
 ```
-load → createPlugin() → initialize(ctx) → [onImGui / onSceneUpdate per frame] → shutdown() → destroyPlugin()
+load → ABI check → createPlugin() → initialize(ctx)
+     → [pump → onSceneUpdate → onImGui per frame]
+     → shutdown() → destroyPlugin() → unload
 ```
+Teardown order is load-bearing and performed by `Application::shutdown()`: stop
+the ROS thread → plugin `shutdown()` → `registry.clear()` (drops the
+subscription/drainer closures, which capture plugin-defined message types) →
+unload the DLLs. Clearing the broker before unload is what keeps a closure from
+being destroyed after its DLL is gone.
+
+### ImGui across the DLL boundary
+ImGui keeps global state (`GImGui`) per copy of its code. ImGui/ImPlot are linked
+**only** into `utsyn_core.dll` (as the single instance) and their API is exported
+(`IMGUI_API=__declspec(dllexport)`); plugins do **not** link their own copy — they
+get the headers from `utsyn_core`'s include dirs and resolve the symbols from
+`utsyn_core`. A plugin that statically linked a second ImGui copy would have a NULL
+`GImGui` and crash on its first `ImGui::Begin()`.
 
 ### PluginContext fields
 ```cpp
@@ -177,10 +229,14 @@ can. Do not implement plugin viewport creation until this is decided.
 
 | Thread | Responsibility |
 |---|---|
-| Render thread (main) | ImGui, threepp, plugin onImGui/onSceneUpdate, queue draining |
-| ROS2 thread | rclcpp::spin(), all topic callbacks, SubscriptionBroker queues |
+| Render thread (main) | ImGui, threepp, plugin onImGui/onSceneUpdate, broker.pump() (queue draining), registry mutation |
+| ROS2 thread | RosCore's SingleThreadedExecutor.spin(): all topic callbacks; per-topic stat update + payload push |
 
-No other threads at this time.
+The ROS2 thread is `RosCore`'s spin `std::thread`. Without ROS2 (`UTSYN_ROS2`
+off) it is never started and `rosEnabled()` is false. The single-threaded
+executor is load-bearing: it makes every `StatsCell` a single-writer, which is
+what the lock-free published-index double-buffer relies on. The `Logger` mutex is
+the only lock shared by both threads. No other threads at this time.
 Do not add threads without updating this document.
 
 ---
@@ -212,13 +268,29 @@ ImGui docking `.ini` state may be stored separately or unified — open decision
 | utsyn_core linkage | SHARED with `WINDOWS_EXPORT_ALL_SYMBOLS` | App + plugins share one core instance (one Logger singleton); auto-export generates the import lib so they can link on Windows |
 | Dependency headers | Included as SYSTEM (threepp via FetchContent `SYSTEM`; imgui/implot/nanosvg via `target_include_directories SYSTEM`) | Demotes third-party header warnings so our `/WX` only fails on our own code |
 | ImGui integration | Init directly (GLFW+OpenGL3 backends), not threepp's `ImguiContext` helper | The helper resets `ImGuiStyle` on first frame, which would wipe our terminal palette |
+| Subscription broker | Two layers: header-only typed `SubscriptionBroker` facade (`subscribe<Msg>`) + non-template ABI-stable `ISubscriptionRegistry` impl in core | The `Msg` template instantiates in the *plugin* TU, so no message-type template ever crosses the DLL boundary; core exports only non-template symbols |
+| ROS→render hand-off | Per-topic `StatsCell` (published-index double-buffer) for stats + `SpscRing` for payloads; drained on the render thread in `broker.pump()` | Lock-free, single-writer (ROS thread) / single-reader (render thread); honors "never block the render loop, never rclcpp on it" |
+| Single ImGui instance | ImGui/ImPlot linked PRIVATE into `utsyn_core` and exported via `IMGUI_API=__declspec(dllexport)`; plugins resolve from core, never link their own copy | A second ImGui copy has its own NULL `GImGui` → crash on first `ImGui::Begin()` in a plugin |
+| Plugin ABI gate | `UTSYN_PLUGIN_ABI_VERSION` + exported `utsynPluginAbiVersion()`; loader rejects mismatches | Detects stale plugins. Does NOT cover CRT/build-config mismatch — plugins must share utsyn_core's toolchain+config |
+| Registry mutation thread | acquire/release/attachDrainer/pump/clear are render-thread-only (asserted); slot reuse via a free-list + handle generation | Keeps plain-int refcounts race-free; generation invalidates stale handles to reused slots |
 
 ---
 
 ## What Does Not Exist Yet
 
-- OpenBridge widget layer (deferred)
-- Vulkan path tracer integration (deferred — OpenGL default first)
-- Plugin config persistence
-- Multi-robot tf namespacing
-- Any actual plugins beyond the example reference (which only draws a panel; broker/scene/viewport wiring is TODO inside it, pending those APIs)
+- **A validated live ROS2 receive path** — the project has only been built/run
+  with ROS2 OFF. The rclcpp receive/stat/teardown code compiles but is unexercised;
+  the MessageMonitor's live/stale/latched/rate feedback has only been seen in the
+  ROS-disabled (`[-OFF-]`) state.
+- **JetBrains Mono font** — the default ImGui font lacks non-ASCII glyphs (an
+  em-dash renders as a box), so UI strings stay ASCII until the font is loaded.
+- Graph-poll detection of advertised/QoS-incompatible/type-mismatch states (the
+  `StreamState` enum has the cases; only `Live`/`NotAdvertised`/`RosDisabled` are
+  currently produced). Serialized-size sampling for `lastMsgBytes`.
+- Safe runtime `release()` while the ROS executor is spinning (review item M1):
+  today `release()`/`clear()` assume the ROS thread is stopped. Needs an
+  executor-synchronized teardown before a plugin retargets a topic at runtime.
+- Monitor-only generic (type-string) subscriptions for a future topic-browser.
+- robot_description plugin (URDF load + joint-state animation) — the end goal.
+- OpenBridge widget layer; Vulkan path tracer; plugin config persistence;
+  multi-robot tf namespacing — all deferred.

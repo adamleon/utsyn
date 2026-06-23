@@ -1,7 +1,14 @@
 #include "Application.hpp"
 
+#include "app/Logger.hpp"
+#include "plugins/IPlugin.hpp"
+#include "plugins/PluginLoader.hpp"
+#include "rendering/SceneManager.hpp"
 #include "rendering/Viewport.hpp"
 #include "rendering/ViewportManager.hpp"
+#include "ros/RosCore.hpp"
+#include "ros/SubscriptionBroker.hpp"
+#include "ros/SubscriptionRegistry.hpp"
 #include "widgets/ViewportPanel.hpp"
 
 #include <threepp/canvas/Canvas.hpp>
@@ -12,11 +19,14 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
+#include <string>
+
 namespace utsyn {
 
 Application::Application() = default;
 
 Application::~Application() {
+    shutdown(); // backstop; normally already done at the end of run()
     if (imguiInitialized_) {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
@@ -43,12 +53,35 @@ void Application::run() {
     initImGui();
     applyTerminalStyle();
 
+    // ROS / plugin backbone. RosCore comes up first (its node backs every
+    // subscription); without ROS2 it is inert. The registry + broker provide the
+    // SubscriptionBroker plugins see; SceneManager is still a stub but the
+    // PluginContext requires it.
+    rosCore_   = std::make_unique<RosCore>();
+    registry_  = std::make_unique<SubscriptionRegistry>(*rosCore_);
+    broker_    = std::make_unique<SubscriptionBroker>(*registry_);
+    scene_     = std::make_unique<SceneManager>();
+
     // One 3D viewport, hosted in a dockable panel.
     viewports_ = std::make_unique<ViewportManager>();
     Viewport& vp = viewports_->create();
     viewportPanel_ = std::make_unique<ViewportPanel>("3D Viewport", vp);
 
+    // One PluginContext shared by all plugins. Its references must outlive every
+    // plugin, so it is built after the collaborators and torn down before them.
+    ctx_ = std::make_unique<PluginContext>(
+            PluginContext{*broker_, *scene_, *viewports_, Logger::instance()});
+
+    plugins_ = std::make_unique<PluginLoader>();
+    const std::size_t loaded =
+            plugins_->loadDirectory(PluginLoader::executableDir(), *ctx_);
+    Logger::instance().info("Application: " + std::to_string(loaded) + " plugin(s) loaded");
+
     canvas_->animate([this] { frame(); });
+
+    // The render loop has returned (window closed): tear down in order while the
+    // GL/ImGui context and the plugin DLLs are still valid.
+    shutdown();
 }
 
 void Application::initImGui() {
@@ -109,8 +142,14 @@ void Application::frame() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // Advance scene animation before the panel renders it.
     const float dt = ImGui::GetIO().DeltaTime;
+
+    // Drain ROS->render payload queues into plugin callbacks BEFORE plugins build
+    // their scene/UI, so both see one coherent frame of data. No-op without ROS2.
+    broker_->pump();
+    plugins_->onSceneUpdate(dt);
+
+    // Advance scene animation before the panel renders it.
     for (std::size_t i = 0; i < viewports_->count(); ++i) {
         viewports_->at(i).update(dt);
     }
@@ -137,17 +176,45 @@ void Application::renderUi() {
     }
 
     if (ImGui::Begin("utsyn")) {
-        ImGui::TextUnformatted("utsyn — ROS2 visualizer / HMI");
+        ImGui::TextUnformatted("utsyn - ROS2 visualizer / HMI");
         ImGui::Separator();
         ImGui::Text("%.1f FPS (%.2f ms/frame)",
                     static_cast<double>(ImGui::GetIO().Framerate),
                     1000.0 / static_cast<double>(ImGui::GetIO().Framerate));
         ImGui::Text("DPI scale: %.2f", static_cast<double>(dpiScale_));
-        ImGui::TextDisabled("No plugins loaded.");
+        ImGui::Text("ROS2: %s", rosCore_->rosEnabled() ? "enabled" : "disabled (UTSYN_ROS2 off)");
+        ImGui::TextDisabled("Plugins loaded: %llu",
+                            static_cast<unsigned long long>(plugins_->count()));
     }
     ImGui::End();
 
     viewportPanel_->onImGui(*renderer_);
+
+    // Plugin panels render into the dockspace via their own ImGui::Begin/End.
+    plugins_->onImGui();
+}
+
+void Application::shutdown() noexcept {
+    if (shutdownDone_) {
+        return;
+    }
+    shutdownDone_ = true;
+    // Teardown order is load-bearing. Stop ROS callbacks first so nothing fires
+    // into a plugin mid-teardown; run plugin shutdown(); clear the broker so the
+    // closures/subscriptions that capture plugin message types are dropped while
+    // the DLLs are still loaded; only then unload the DLLs.
+    if (rosCore_) {
+        rosCore_->stop();
+    }
+    if (plugins_) {
+        plugins_->shutdownAll();
+    }
+    if (registry_) {
+        registry_->clear();
+    }
+    if (plugins_) {
+        plugins_->unloadAll();
+    }
 }
 
 } // namespace utsyn

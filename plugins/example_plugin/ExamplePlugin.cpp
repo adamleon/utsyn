@@ -4,10 +4,11 @@
 // PluginContext, draw an ImGui panel each frame, and export the C entry
 // points the PluginLoader resolves by name.
 //
-// The broker/scene/viewport/logger collaborators are still stubs (their
-// methods are TODOs), so this plugin only touches what currently exists —
-// ImGui — and marks with TODO where the real APIs will plug in later.
+// The broker/scene/viewport collaborators now exist; this reference plugin wires
+// the lifecycle and the Logger, and draws an ImGui panel. Topic monitoring lands
+// in the dedicated demo plugin (the MessageMonitor widget, next deliverable).
 
+#include "app/Logger.hpp"
 #include "plugins/IPlugin.hpp"
 
 #include <imgui.h>
@@ -20,10 +21,10 @@ class ExamplePlugin final : public IPlugin {
 public:
     void initialize(PluginContext& ctx) override {
         ctx_ = &ctx;
-        // TODO: subscribe to a topic once SubscriptionBroker::subscribe exists:
+        ctx.logger.info("ExamplePlugin: initialized");
+        // TODO: subscribe to a topic once the MessageMonitor widget lands:
         //   ctx.broker.subscribe<sensor_msgs::msg::JointState>(
         //       "/joint_states", [this](const auto& msg) { onJointState(msg); });
-        // TODO: ctx.logger.info("ExamplePlugin initialized");
     }
 
     void onImGui() override {
@@ -47,7 +48,9 @@ public:
     }
 
     void shutdown() override {
-        // TODO: ctx_->logger.info("ExamplePlugin shutting down");
+        if (ctx_) {
+            ctx_->logger.info("ExamplePlugin: shutting down");
+        }
         ctx_ = nullptr;
     }
 
@@ -78,4 +81,8 @@ extern "C" UTSYN_PLUGIN_EXPORT utsyn::IPlugin* createPlugin() {
 
 extern "C" UTSYN_PLUGIN_EXPORT void destroyPlugin(utsyn::IPlugin* plugin) {
     delete plugin;
+}
+
+extern "C" UTSYN_PLUGIN_EXPORT int utsynPluginAbiVersion() {
+    return UTSYN_PLUGIN_ABI_VERSION;
 }

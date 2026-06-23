@@ -28,7 +28,7 @@ Use TODO comments in code for planned work, not the architecture doc.
 
 ---
 
-
+## Build, Run & Test
 
 - CMake 3.25+
 - C++20 required — no C++17 fallbacks
@@ -36,29 +36,58 @@ Use TODO comments in code for planned work, not the architecture doc.
 - Secondary compiler: clang-cl
 - MinGW is explicitly rejected — do not add MinGW workarounds
 - Windows primary target; Linux secondary
-- Build type: Debug and Release both use contract checking (see below)
+- Both Debug and Release use contract checking (see below)
+
+The canonical Windows build uses the **Visual Studio multi-config generator**.
+CMake locates `cl.exe` via vswhere, so the Strawberry MinGW/Ninja that may be on
+PATH is ignored. The configure/build commands are also encoded in
+`.vscode/tasks.json`.
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
+# Configure (first run downloads all deps via FetchContent — slow)
+cmake -B build -G "Visual Studio 17 2022" -A x64
+
+# Build — config is chosen HERE, not at configure time. This is a multi-config
+# generator, so -DCMAKE_BUILD_TYPE has no effect; use --config instead.
+cmake --build build --config Debug --parallel                      # everything (incl. plugin_example)
+cmake --build build --config Release --target utsyn --parallel     # app + utsyn_core only
 ```
+
+Run the app: `build/Debug/utsyn.exe` (or `build/Release/utsyn.exe`).
+
+**Tests:** there is no test suite yet — threepp's own tests are disabled
+(`THREEPP_BUILD_TESTS=OFF`) and utsyn defines no test target. Do not assume a
+`ctest`/`gtest` setup exists; if you add tests, wire the target and document it
+here and in ARCHITECTURE.md.
+
+**ROS2 is optional at configure time.** CMake does `find_package(ament_cmake
+QUIET)`: if a ROS2 environment is sourced, it builds with ROS2 support and
+defines `UTSYN_ROS2=1`; otherwise it warns and builds a ROS2-less binary. Gate
+all rclcpp/tf2 code behind `#if UTSYN_ROS2`. To build with ROS2, source the
+Jazzy setup script before `cmake -B build`.
+
+**Lint:** clang-tidy is off by default — enable with
+`-DENABLE_CLANG_TIDY=ON` (applies to `utsyn` and `utsyn_core`).
+`compile_commands.json` is exported for editor/tidy use.
 
 ---
 
 ## Dependencies
 
-All pulled via CMake FetchContent or vcpkg unless noted.
+All pulled via CMake FetchContent, except ROS2 (system `find_package`/ament).
+There is no vcpkg in this project. See `CMakeLists.txt` for exact GIT_TAGs.
 
-| Library | Version | Purpose |
-|---|---|---|
-| threepp | main branch | 3D rendering, scene graph, URDF/glTF/STL/FBX/SVG loading |
-| imgui | docking branch | UI layer, panels, windows, widgets |
-| implot | latest | Real-time plots, graphs, topic monitors |
-| nanosvg | latest | SVG rasterization → ImGui textures |
-| ROS2 | Jazzy | Topic subscriptions, tf2, message types |
-| glm | latest | Math types |
+| Library | Version (tag) | Source | Purpose |
+|---|---|---|---|
+| threepp | master | FetchContent | 3D rendering, scene graph, URDF/glTF/STL/FBX/SVG loading (examples/tests OFF) |
+| imgui | docking | FetchContent | UI layer, panels, windows, widgets (built as `imgui_lib`, no upstream CMake) |
+| implot | master | FetchContent | Real-time plots, graphs, topic monitors (built as `implot_lib`) |
+| nanosvg | master | FetchContent | SVG rasterization → ImGui textures |
+| nlohmann/json | v3.11.3 | FetchContent | Layout persistence (JSON) |
+| ROS2 | Jazzy | find_package (optional) | Topic subscriptions, tf2, message types |
 
-Do not introduce new dependencies without updating this table.
+Use threepp's bundled math types — **glm is not a dependency** (not fetched, not
+linked). Do not introduce new dependencies without updating this table.
 
 ---
 
@@ -75,37 +104,29 @@ Never flip to left-handed. All pose/transform code must respect this.
 
 ## Project Structure
 
+**ARCHITECTURE.md holds the authoritative module map and BUILT/STUB status** —
+consult it rather than trusting this tree, which only sketches the layout. The
+binaries are: `utsyn.exe` (app) → `utsyn_core.dll` (SHARED core, also linked by
+plugins) → `plugin_example.dll` (reference plugin).
+
 ```
 utsyn/
-├── CLAUDE.md
 ├── CMakeLists.txt
-├── .clang-tidy
-├── .clang-format
+├── ARCHITECTURE.md                     # living record of current state
 ├── src/
-│   ├── main.cpp
-│   ├── app/
-│   │   ├── Application.hpp / .cpp       # Top-level app, render loop
-│   │   ├── LayoutManager.hpp / .cpp     # Panel layout, save/load
-│   │   └── AnimatedValue.hpp            # Animation primitives
-│   ├── rendering/
-│   │   ├── Viewport.hpp / .cpp          # Wraps a threepp scene+camera
-│   │   └── SceneManager.hpp / .cpp      # Manages scene objects from plugins
-│   ├── ros/
-│   │   ├── TopicMonitor.hpp / .cpp      # ROS2 subscription management
-│   │   └── TfListener.hpp / .cpp        # Consumes tf2, exposes to scene
-│   ├── plugins/
-│   │   ├── IPlugin.hpp                  # Plugin interface (see below)
-│   │   └── PluginLoader.hpp / .cpp      # Dynamic .so/.dll loading
-│   └── widgets/
-│       ├── TopicPlot.hpp / .cpp         # ImPlot-based topic monitor
-│       ├── TfTree.hpp / .cpp            # TF tree panel
-│       └── ViewportPanel.hpp / .cpp     # Hosts a threepp Viewport
-├── plugins/
-│   └── example_plugin/                  # Reference plugin implementation
-└── assets/
-    └── fonts/
-        └── JetBrainsMono-Regular.ttf
+│   ├── main.cpp                        # constructs Application, calls run()
+│   ├── app/                            # Application, LayoutManager, Logger (singleton)
+│   ├── rendering/                      # Viewport, ViewportManager, SceneManager
+│   ├── ros/                            # SubscriptionBroker, TfListener
+│   ├── plugins/                        # IPlugin (contract), PluginLoader
+│   └── widgets/                        # TopicPlot, TfTree, ViewportPanel
+├── plugins/example_plugin/             # ExamplePlugin.cpp — reference plugin
+└── assets/fonts/                       # JetBrains Mono (.ttf not yet added — build warns & skips)
 ```
+
+Most non-app modules are currently STUBs (header + .cpp compile, methods are
+TODO). BUILT so far: Application, Viewport, ViewportManager, ViewportPanel,
+IPlugin, ExamplePlugin. Check ARCHITECTURE.md before assuming a module works.
 
 ---
 
