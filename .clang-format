@@ -1,0 +1,53 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+# Indentation
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+
+# Line length
+ColumnLimit: 100
+
+# Braces
+BreakBeforeBraces: Allman
+
+# Includes
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Project headers first
+  - Regex: "^\"utsyn/"
+    Priority: 1
+  # Then threepp/imgui/implot
+  - Regex: "^<(threepp|imgui|implot)"
+    Priority: 2
+  # Then ROS2
+  - Regex: "^<(rclcpp|std_msgs|sensor_msgs|geometry_msgs|tf2)"
+    Priority: 3
+  # Then STL
+  - Regex: "^<"
+    Priority: 4
+
+# Alignment
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveDeclarations: false
+AlignTrailingComments: true
+
+# Spacing
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesInAngles: Never
+
+# C++20
+Standard: c++20
+
+# Pointer alignment
+PointerAlignment: Left
+
+# Short functions/ifs
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false

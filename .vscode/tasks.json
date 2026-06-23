@@ -1,0 +1,69 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "CMake: configure",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "-B", "build",
+        "-G", "Visual Studio 17 2022",
+        "-A", "x64"
+      ],
+      "problemMatcher": [],
+      "detail": "Generate the build system with the MSVC (VS 2022) generator. CMake locates cl.exe via vswhere — no vcvars needed, and the Strawberry MinGW/Ninja on PATH is ignored. First run downloads deps via FetchContent and is slow."
+    },
+    {
+      "label": "Build utsyn (Debug)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build", "build",
+        "--config", "Debug",
+        "--target", "utsyn",
+        "--parallel"
+      ],
+      "dependsOn": "CMake: configure",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$msCompile"],
+      "detail": "Build only the utsyn executable (+ utsyn_core) in Debug."
+    },
+    {
+      "label": "Build utsyn (Release)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build", "build",
+        "--config", "Release",
+        "--target", "utsyn",
+        "--parallel"
+      ],
+      "dependsOn": "CMake: configure",
+      "group": "build",
+      "problemMatcher": ["$msCompile"],
+      "detail": "Build only the utsyn executable (+ utsyn_core) in Release."
+    },
+    {
+      "label": "Build all (Debug)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build", "build",
+        "--config", "Debug",
+        "--parallel"
+      ],
+      "dependsOn": "CMake: configure",
+      "group": "build",
+      "problemMatcher": ["$msCompile"],
+      "detail": "Build every target incl. plugin_example. Requires plugins/example_plugin/ExamplePlugin.cpp to exist."
+    },
+    {
+      "label": "CMake: clean",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "build", "--target", "clean"],
+      "problemMatcher": [],
+      "detail": "Remove build artifacts (keeps the configured build tree)."
+    }
+  ]
+}

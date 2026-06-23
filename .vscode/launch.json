@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug utsyn",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/Debug/utsyn.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/build",
+      "stopAtEntry": false,
+      "console": "integratedTerminal",
+      "preLaunchTask": "Build utsyn (Debug)"
+    },
+    {
+      "name": "Run utsyn (Release, no debugger)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/Release/utsyn.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/build",
+      "stopAtEntry": false,
+      "console": "integratedTerminal",
+      "preLaunchTask": "Build utsyn (Release)"
+    }
+  ]
+}
