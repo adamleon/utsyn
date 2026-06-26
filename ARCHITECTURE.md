@@ -3,7 +3,14 @@
 Current state of the system. Updated at the end of every session that changes structure, interfaces, or data flow.
 This describes what exists, not what is planned.
 
-Last updated: ROS/plugin backbone wired — Logger, RosCore (ROS2 lifecycle/thread), SubscriptionBroker (two-layer, with per-topic stats), and PluginLoader are implemented; Application loads plugins and drives their lifecycle. Built and run with ROS2 OFF (UTSYN_ROS2 undefined).
+Last updated: **live ROS2 data → robot is now validated end to end.** utsyn (ROS2 ON,
+GL renderer) received a real UR5e's latched `/robot_description` over DDS from a separate
+RoboStack Jazzy install, reparsed to 6 DOF, and articulated from live `/joint_states`.
+A new `PackageResolver` rewrites `package://` mesh URIs to absolute on-disk paths so the
+URDF's meshes load even when they live in a different ROS install than utsyn runs in.
+Scene injection (SceneManager) + Actor framework + robot_description plugin are built on a
+SHARED threepp. Most of this is uncommitted on branch `spike/threepp-shared`. See
+MILESTONE.md for the resume guide (pixi+ROS build commands, git state, next steps).
 
 ---
 
@@ -48,8 +55,12 @@ constructs `RosCore`, a `SubscriptionRegistry` + `SubscriptionBroker`, a
 it runs `broker.pump()` → `onSceneUpdate(dt)` → scene/threepp render →
 `onImGui()`, and on exit performs an ordered `shutdown()` (stop ROS → plugin
 `shutdown()` → clear broker → unload DLLs). **ExamplePlugin is now loaded** and
-logs through the real `Logger`. This was verified end to end with **ROS2 OFF**:
-the plugin loads, renders, and the app exits cleanly (0).
+logs through the real `Logger`. Verified end to end both with **ROS2 OFF** (plugins
+load, render, exit 0) and, in a separate Release `build-ros` tree, with **ROS2 ON**
+(pixi ROS2 Jazzy): `RosCore` inits rclcpp, node 'utsyn' spins, subscriptions go live
+on the graph. **The live receive path is now validated**: utsyn received a real UR5e's
+latched `/robot_description` over DDS from a separate RoboStack Jazzy install (cross-build
+FastDDS interop, domain 0) and articulated the arm from live `/joint_states`.
 
 Because ROS2 is optional and was absent at build time, all rclcpp-touching code is
 compiled out behind `#if defined(UTSYN_ROS2) && UTSYN_ROS2`; `RosCore::rosEnabled()`
@@ -69,8 +80,30 @@ ROS2 OFF: both plugins load, the monitor panel renders two `[-OFF-]` rows with t
 expanded TYPE/STATE/RATE/COUNT/LAST/SIZE grid and an editable topic field, and the
 app exits cleanly. The live (ROS2-on) feedback path is still unvalidated.
 
-The still-stubbed modules (`LayoutManager`, `SceneManager`, `TfListener`,
-`TopicPlot`, `TfTree`) have header + .cpp that compile but whose methods are TODO.
+**3D scene injection + the first robot (in progress, GL renderer).** threepp is now
+built as a **shared library** (`threepp.dll`) so the ONE threepp instance is shared
+by `utsyn_core` and every plugin — required because threepp's renderer uses RTTI,
+so a plugin must create threepp objects with the same instance the renderer uses.
+`SceneManager` is now the handle-based scene-injection API (`SceneHandle` = id +
+generation): it owns plugin-added `threepp::Object3D`s and forwards add/remove to a
+`Viewport`'s scene (exposed via a new `Viewport::scene()` accessor; the placeholder
+demo meshes were removed, leaving grid + axes). `Actor` (header-only base in
+`src/rendering`) is utsyn's rviz-"Display" equivalent — a plugin-contributed 3D
+visualization with an onAttach/onUpdate/onDetach/onInspector lifecycle that owns
+its scene objects. `RobotActor` (in the robot_description plugin) loads a URDF
+string with threepp's `URDFLoader::parse()` → `Robot` and articulates it via
+`setJointValue` (name→index from `getArticulatedJointInfo()`); `RobotDescriptionPlugin`
+drives it, with a built-in primitive sample arm + manual joint sliders for offline
+use and ROS-guarded `/robot_description` + `/joint_states` feeds. Before parsing, the
+actor runs the URDF through a `PackageResolver` that rewrites `package://<pkg>/...` mesh
+URIs to absolute on-disk paths (threepp's loader otherwise can't resolve `package://`
+without a baseDir/package.xml to walk — and a wire-delivered URDF has neither). Verified
+both with ROS2 OFF (sample arm, 3 DOF, no meshes) and ROS2 ON against a live UR5e (6 DOF,
+mesh URIs resolved via `UTSYN_PACKAGE_PATH`). The interaction layer (selection / transform
+gizmos / picking) is deliberately deferred to a later layer.
+
+The still-stubbed modules (`LayoutManager`, `TfListener`, `TopicPlot`, `TfTree`)
+have header + .cpp that compile but whose methods are TODO.
 
 Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 
@@ -83,9 +116,10 @@ Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 | Application | src/app/Application | BUILT | Window, ImGui dockspace + terminal style, render loop; wires the ROS/plugin backbone, runs plugin lifecycle, ordered shutdown |
 | LayoutManager | src/app/LayoutManager | STUB | Panel layout persistence (JSON) |
 | Logger | src/app/Logger | BUILT | Thread-safe singleton logger (info/warn/error + ring buffer, mirrors to stderr) |
-| Viewport | src/rendering/Viewport | BUILT | threepp scene + camera, rendered offscreen to a RenderTarget |
+| Viewport | src/rendering/Viewport | BUILT | threepp scene + camera, rendered offscreen to a RenderTarget; exposes scene() for SceneManager (grid + axes only — demo meshes removed) |
 | ViewportManager | src/rendering/ViewportManager | BUILT | Owns and manages all Viewport instances |
-| SceneManager | src/rendering/SceneManager | STUB | Manages 3D scene objects added by plugins |
+| SceneManager | src/rendering/SceneManager | BUILT | Handle-based scene-injection API (SceneHandle = id+generation); owns plugin-added threepp Object3Ds, forwards add/remove to a Viewport's scene; render-thread-only |
+| Actor | src/rendering/Actor | BUILT | Header-only base for a plugin 3D visualization (rviz "Display"): onAttach/onUpdate/onDetach/onInspector lifecycle, owns its scene objects |
 | RosCore | src/ros/RosCore | BUILT | ROS2 lifecycle: rclcpp init, "utsyn" node, SingleThreadedExecutor + spin thread. Inert without ROS2 |
 | TopicStats / StatsCell | src/ros/TopicStats | BUILT | Per-topic stats POD + lock-free published-index double-buffer (ROS→render). rclcpp-free |
 | SpscRing | src/ros/SpscRing | BUILT | Single-producer/single-consumer payload queue (ROS→render). rclcpp-free |
@@ -93,6 +127,7 @@ Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 | SubscriptionBroker | src/ros/SubscriptionBroker | BUILT | Header-only typed facade (subscribe<Msg>/monitor<Msg>) over the registry. This is what PluginContext exposes |
 | SubscriptionRegistry | src/ros/SubscriptionRegistry | BUILT | Concrete registry: dedup + refcount + per-topic StatsCell + drainers + pump()/clear(). rclcpp only in the .cpp |
 | TfListener | src/ros/TfListener | STUB | Consumes tf2, exposes transforms to SceneManager |
+| PackageResolver | src/ros/PackageResolver | BUILT | Resolves `package://pkg/rel` URIs to absolute paths via search roots (UTSYN_PACKAGE_PATH / AMENT_PREFIX_PATH / ROS_PACKAGE_PATH); rewrites a URDF's mesh URIs pre-parse. rclcpp-free |
 | IPlugin | src/plugins/IPlugin | BUILT | Plugin contract (interface) + UTSYN_PLUGIN_ABI_VERSION sentinel |
 | PluginLoader | src/plugins/PluginLoader | BUILT | Loads plugin_*.dll/.so, resolves entry points, ABI-checks, drives lifecycle, ordered unload |
 | TopicPlot | src/widgets/TopicPlot | STUB | ImPlot-based real-time topic monitor panel |
@@ -101,7 +136,8 @@ Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 | MessageMonitor | src/widgets/MessageMonitor | BUILT | Reusable per-topic streaming-feedback widget plugins embed (one collapsible block per topic; addRow + bind<Msg>) |
 | Theme | src/app/Theme | BUILT | Named status colors (StatusLive/Stale/Error/Idle) for the terminal palette |
 | ExamplePlugin | plugins/example_plugin | BUILT | Reference plugin — full IPlugin impl + ImGui panel; loaded by the app, logs via Logger |
-| RobotMonitorPlugin | plugins/robot_monitor | BUILT | Demo: monitors /joint_states + /robot_description via MessageMonitor; seed of the robot_description plugin |
+| RobotMonitorPlugin | plugins/robot_monitor | BUILT | Demo: monitors /joint_states + /robot_description via MessageMonitor |
+| RobotDescriptionPlugin | plugins/robot_description | BUILT | Loads URDF (RobotActor) + articulates from /joint_states; inspector with sample arm + manual joint sliders. GL renderer; visual not yet eyeball-verified |
 
 Update this table when modules are created or their status changes.
 
@@ -273,6 +309,7 @@ ImGui docking `.ini` state may be stored separately or unified — open decision
 | Single ImGui instance | ImGui/ImPlot linked PRIVATE into `utsyn_core` and exported via `IMGUI_API=__declspec(dllexport)`; plugins resolve from core, never link their own copy | A second ImGui copy has its own NULL `GImGui` → crash on first `ImGui::Begin()` in a plugin |
 | Plugin ABI gate | `UTSYN_PLUGIN_ABI_VERSION` + exported `utsynPluginAbiVersion()`; loader rejects mismatches | Detects stale plugins. Does NOT cover CRT/build-config mismatch — plugins must share utsyn_core's toolchain+config |
 | Registry mutation thread | acquire/release/attachDrainer/pump/clear are render-thread-only (asserted); slot reuse via a free-list + handle generation | Keeps plain-int refcounts race-free; generation invalidates stale handles to reused slots |
+| URDF mesh resolution | `PackageResolver` rewrites `package://` → absolute paths (string transform) before threepp parses the URDF; search roots from `UTSYN_PACKAGE_PATH` / `AMENT_PREFIX_PATH` / `ROS_PACKAGE_PATH` | threepp's loader only resolves `package://` by walking up to a `package.xml` from a baseDir; a URDF arriving over the wire has neither, so meshes drop silently. Env-driven roots decouple "where the robot's packages live on disk" from "which ROS env utsyn runs in" |
 
 ---
 
