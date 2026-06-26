@@ -1,17 +1,12 @@
 #include "Viewport.hpp"
 
 #include <threepp/cameras/PerspectiveCamera.hpp>
-#include <threepp/geometries/BoxGeometry.hpp>
-#include <threepp/geometries/CylinderGeometry.hpp>
-#include <threepp/geometries/SphereGeometry.hpp>
 #include <threepp/helpers/AxesHelper.hpp>
 #include <threepp/helpers/GridHelper.hpp>
 #include <threepp/lights/AmbientLight.hpp>
 #include <threepp/lights/DirectionalLight.hpp>
-#include <threepp/materials/MeshPhongMaterial.hpp>
 #include <threepp/math/Color.hpp>
 #include <threepp/math/MathUtils.hpp>
-#include <threepp/objects/Mesh.hpp>
 #include <threepp/renderers/GLRenderer.hpp>
 #include <threepp/renderers/RenderTarget.hpp>
 #include <threepp/scenes/Scene.hpp>
@@ -20,17 +15,6 @@
 #include <cmath>
 
 namespace utsyn {
-
-namespace {
-
-std::shared_ptr<threepp::Mesh> makeMesh(
-        const std::shared_ptr<threepp::BufferGeometry>& geometry, unsigned int hexColor) {
-    auto material = threepp::MeshPhongMaterial::create();
-    material->color = threepp::Color(hexColor);
-    return threepp::Mesh::create(geometry, material);
-}
-
-} // namespace
 
 Viewport::Viewport() {
     using namespace threepp;
@@ -49,21 +33,8 @@ Viewport::Viewport() {
     // Axes: X red (forward), Y green (left), Z blue (up).
     scene_->add(AxesHelper::create(2.0f));
 
-    // A small scene: a slowly rotating green box, a red sphere, a blue cylinder.
-    spinner_ = makeMesh(BoxGeometry::create(1.5f, 1.5f, 1.5f), 0x33CC33);
-    spinner_->position.set(0, 0, 1);
-    scene_->add(spinner_);
-
-    auto sphere = makeMesh(SphereGeometry::create(0.8f), 0xCC4444);
-    sphere->position.set(3, 0, 0.8f);
-    scene_->add(sphere);
-
-    // Cylinder is built along Y; stand it up along Z.
-    auto cylinder = makeMesh(CylinderGeometry::create(0.5f, 0.5f, 1.6f), 0x4488CC);
-    cylinder->rotateX(math::PI / 2.0f);
-    cylinder->position.set(-3, 0, 0.8f);
-    scene_->add(cylinder);
-
+    // The scene is intentionally empty of content beyond the grid/axes reference —
+    // plugins (e.g. robot_description) add their objects via SceneManager.
     scene_->add(AmbientLight::create(Color(0xffffff), 0.4f));
     auto sun = DirectionalLight::create(Color(0xffffff), 0.8f);
     sun->position.set(5, -5, 10);
@@ -99,10 +70,13 @@ void Viewport::resize(int width, int height) {
     camera_->updateProjectionMatrix();
 }
 
-void Viewport::update(float deltaTime) {
-    if (spinner_) {
-        spinner_->rotateZ(deltaTime * 0.6f);
-    }
+void Viewport::update(float /*deltaTime*/) {
+    // Per-frame viewport hook. The scene's content is owned by plugins (added via
+    // SceneManager); nothing to animate here at the viewport level.
+}
+
+threepp::Scene& Viewport::scene() noexcept {
+    return *scene_;
 }
 
 void Viewport::orbit(float dAzimuth, float dElevation) {

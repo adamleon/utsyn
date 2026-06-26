@@ -80,7 +80,16 @@ FetchContent_Declare(
     GIT_TAG        v3.11.3
 )
 
-FetchContent_MakeAvailable(threepp imgui implot nanosvg nlohmann_json)
+# SPIKE: build threepp (and its vendored GLFW) as a SHARED library so there is ONE
+# threepp instance shared by utsyn_core and every plugin. threepp's renderer uses
+# RTTI/dynamic_cast pervasively, so a plugin that creates threepp objects MUST share
+# the same instance or its objects' type_info won't match the core renderer's.
+# threepp has no explicit lib type, so it honors BUILD_SHARED_LIBS. imgui_lib/
+# implot_lib are declared explicit STATIC below, so they stay static regardless.
+set(BUILD_SHARED_LIBS ON)
+FetchContent_MakeAvailable(threepp)
+set(BUILD_SHARED_LIBS OFF)
+FetchContent_MakeAvailable(imgui implot nanosvg nlohmann_json)
 
 # ============================================================
 # ImGui library target
@@ -159,6 +168,7 @@ add_library(utsyn_core SHARED
     src/widgets/MessageMonitor.cpp
     src/ros/RosCore.cpp
     src/ros/SubscriptionRegistry.cpp
+    src/ros/PackageResolver.cpp
     src/plugins/PluginLoader.cpp
 )
 
@@ -206,13 +216,19 @@ target_link_libraries(utsyn_core PUBLIC ${CMAKE_DL_LIBS})
 target_link_libraries(utsyn_core PRIVATE utsyn_warnings)
 
 if(ROS2_AVAILABLE)
+    # Modern ROS2 (Jazzy) target-based linking. ament_target_dependencies() links
+    # with a PLAIN target_link_libraries internally, which collides with our
+    # keyword-style linking ("cannot mix plain and keyword signatures"). Link the
+    # namespaced / <pkg>_TARGETS targets directly instead. PUBLIC so plugins inherit
+    # the ROS includes + libs transitively (they instantiate create_subscription<Msg>
+    # in their own TUs).
     target_link_libraries(utsyn_core PUBLIC
         rclcpp::rclcpp
         tf2::tf2
         tf2_ros::tf2_ros
-    )
-    ament_target_dependencies(utsyn_core
-        rclcpp std_msgs sensor_msgs geometry_msgs tf2 tf2_ros
+        ${std_msgs_TARGETS}
+        ${sensor_msgs_TARGETS}
+        ${geometry_msgs_TARGETS}
     )
     target_compile_definitions(utsyn_core PUBLIC UTSYN_ROS2=1)
 endif()
@@ -225,6 +241,17 @@ add_executable(utsyn
 )
 target_link_libraries(utsyn PRIVATE utsyn_core utsyn_warnings)
 
+# threepp is a SHARED lib, and threepp emits threepp.dll / glfw3.dll into its own
+# output dir (build/bin), NOT next to utsyn.exe. Copy every runtime DLL utsyn
+# depends on (threepp.dll, glfw3.dll, ...) next to the exe after each build, so the
+# conventional build/<config>/utsyn.exe run path works and the plugin loader (which
+# scans the exe's directory) finds threepp alongside it.
+add_custom_command(TARGET utsyn POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:utsyn> $<TARGET_FILE_DIR:utsyn>
+    COMMAND_EXPAND_LISTS
+)
+
 # ============================================================
 # Example plugin
 # ============================================================
@@ -235,18 +262,10 @@ target_link_libraries(plugin_example PRIVATE utsyn_core utsyn_warnings)
 set_target_properties(plugin_example PROPERTIES
     PREFIX ""   # No "lib" prefix — plugins load by name
 )
-
-# When ROS2 is present, a plugin that calls broker.subscribe<Msg>() instantiates
-# rclcpp::create_subscription<Msg> in its OWN translation unit, so the plugin
-# target must link rclcpp and the message packages directly (it cannot rely on
-# utsyn_core's usage requirements for template instantiation). UTSYN_ROS2 itself
-# propagates from utsyn_core. ExamplePlugin doesn't subscribe yet, but wiring this
-# now keeps the demo plugin (next deliverable) buildable.
-if(ROS2_AVAILABLE)
-    ament_target_dependencies(plugin_example
-        rclcpp std_msgs sensor_msgs geometry_msgs tf2 tf2_ros
-    )
-endif()
+# Plugins link utsyn_core PRIVATE and inherit its PUBLIC ROS usage requirements
+# (rclcpp + message includes/libs, marked SYSTEM) transitively, so no explicit ROS
+# linkage is needed here — even though subscribe<Msg> instantiates in the plugin's
+# own TU.
 
 # ============================================================
 # Robot monitor demo plugin (topic-monitoring base demo)
@@ -258,15 +277,24 @@ target_link_libraries(plugin_robot_monitor PRIVATE utsyn_core utsyn_warnings)
 set_target_properties(plugin_robot_monitor PROPERTIES
     PREFIX ""   # No "lib" prefix — plugins load by name
 )
-# This plugin subscribes (broker.subscribe<JointState/String>), so when ROS2 is
-# present it instantiates create_subscription<Msg> in its own TU and must link the
-# message packages directly (UTSYN_ROS2 itself propagates from utsyn_core). ament
-# marks these include dirs SYSTEM, so /W4 /WX is not tripped by rclcpp headers.
-if(ROS2_AVAILABLE)
-    ament_target_dependencies(plugin_robot_monitor
-        rclcpp std_msgs sensor_msgs geometry_msgs tf2 tf2_ros
-    )
-endif()
+# ROS deps inherited transitively from utsyn_core (see plugin_example).
+
+# ============================================================
+# Robot description plugin (URDF -> threepp Robot as an Actor)
+# ============================================================
+# RobotActor.cpp uses threepp's URDFLoader/Robot directly — this is the first
+# plugin to create threepp objects, which is why threepp is built SHARED (one
+# instance shared with utsyn_core; see the threepp link section). threepp's headers
+# propagate (SYSTEM) from utsyn_core, so /W4 /WX is not tripped by them.
+add_library(plugin_robot_description SHARED
+    plugins/robot_description/RobotActor.cpp
+    plugins/robot_description/RobotDescriptionPlugin.cpp
+)
+target_link_libraries(plugin_robot_description PRIVATE utsyn_core utsyn_warnings)
+set_target_properties(plugin_robot_description PROPERTIES
+    PREFIX ""   # No "lib" prefix — plugins load by name
+)
+# ROS deps inherited transitively from utsyn_core (see plugin_example).
 
 # ============================================================
 # Assets
@@ -308,6 +336,6 @@ if(ENABLE_CLANG_TIDY)
     endif()
 endif()
 
-if(ROS2_AVAILABLE)
-    ament_package()
-endif()
+# NOTE: no ament_package() — utsyn is a standalone CMake app that *consumes* ROS2
+# via find_package, not a colcon/ament package (ament_package() would require a
+# package.xml and is for packages built inside a ROS2 workspace).

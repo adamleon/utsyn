@@ -9,7 +9,6 @@ class Scene;
 class PerspectiveCamera;
 class RenderTarget;
 class GLRenderer;
-class Mesh;
 } // namespace threepp
 
 namespace utsyn {
@@ -50,6 +49,10 @@ public:
     [[nodiscard]] int width() const { return width_; }
     [[nodiscard]] int height() const { return height_; }
 
+    // The threepp scene this viewport renders. SceneManager binds this so plugins
+    // can add/remove objects (the Viewport keeps ownership of the scene).
+    [[nodiscard]] threepp::Scene& scene() noexcept;
+
 private:
     // Recompute the camera position from the orbit parameters (target,
     // radius, azimuth, elevation) and point it at the target.
@@ -58,7 +61,6 @@ private:
     std::shared_ptr<threepp::Scene>             scene_;
     std::shared_ptr<threepp::PerspectiveCamera> camera_;
     std::unique_ptr<threepp::RenderTarget>      renderTarget_;
-    std::shared_ptr<threepp::Mesh>              spinner_; // demo content
     int width_ = 0;
     int height_ = 0;
 

@@ -62,9 +62,11 @@ void Application::run() {
     broker_    = std::make_unique<SubscriptionBroker>(*registry_);
     scene_     = std::make_unique<SceneManager>();
 
-    // One 3D viewport, hosted in a dockable panel.
+    // One 3D viewport, hosted in a dockable panel. Bind its scene into the
+    // SceneManager so plugins can add objects to it (ctx.scene).
     viewports_ = std::make_unique<ViewportManager>();
     Viewport& vp = viewports_->create();
+    scene_->bindScene(kPrimaryViewport, vp.scene());
     viewportPanel_ = std::make_unique<ViewportPanel>("3D Viewport", vp);
 
     // One PluginContext shared by all plugins. Its references must outlive every
@@ -117,6 +119,11 @@ void Application::applyTerminalStyle() {
     style.FrameRounding     = 0.0f;
     style.ScrollbarRounding = 0.0f;
     style.TabRounding       = 0.0f;
+    style.GrabRounding      = 0.0f;
+    style.PopupRounding     = 0.0f;
+    style.ChildRounding     = 0.0f;
+    style.WindowBorderSize  = 1.0f;
+    style.FrameBorderSize   = 1.0f; // boxy frames around inputs/buttons (terminal)
     style.FramePadding      = ImVec2(6, 3);
     style.ItemSpacing       = ImVec2(8, 4);
 
@@ -130,6 +137,15 @@ void Application::applyTerminalStyle() {
     colors[ImGuiCol_Button]        = ImVec4(0.12f, 0.40f, 0.12f, 1.0f);
     colors[ImGuiCol_ButtonHovered] = ImVec4(0.18f, 0.60f, 0.18f, 1.0f);
     colors[ImGuiCol_ButtonActive]  = ImVec4(0.10f, 0.30f, 0.10f, 1.0f);
+
+    // Boxy green frames + terminal row-hover (Selectable/header rows use these).
+    colors[ImGuiCol_Border]         = ImVec4(0.15f, 0.40f, 0.15f, 0.55f);
+    colors[ImGuiCol_Separator]      = ImVec4(0.15f, 0.40f, 0.15f, 0.70f);
+    colors[ImGuiCol_Header]         = ImVec4(0.12f, 0.40f, 0.12f, 1.0f);
+    colors[ImGuiCol_HeaderHovered]  = ImVec4(0.18f, 0.55f, 0.18f, 1.0f);
+    colors[ImGuiCol_HeaderActive]   = ImVec4(0.10f, 0.30f, 0.10f, 1.0f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.16f, 0.28f, 0.16f, 1.0f);
+    colors[ImGuiCol_FrameBgActive]  = ImVec4(0.18f, 0.36f, 0.18f, 1.0f);
 
     // Scale all metrics for the current DPI (sizes above are at 1x).
     style.ScaleAllSizes(dpiScale_);
@@ -175,7 +191,7 @@ void Application::renderUi() {
         ImGui::EndMainMenuBar();
     }
 
-    if (ImGui::Begin("utsyn")) {
+    if (ImGui::Begin("utsyn", nullptr, ImGuiWindowFlags_NoCollapse)) {
         ImGui::TextUnformatted("utsyn - ROS2 visualizer / HMI");
         ImGui::Separator();
         ImGui::Text("%.1f FPS (%.2f ms/frame)",
@@ -211,6 +227,9 @@ void Application::shutdown() noexcept {
     }
     if (registry_) {
         registry_->clear();
+    }
+    if (scene_) {
+        scene_->clear(); // detach plugin objects while the viewport scene is alive
     }
     if (plugins_) {
         plugins_->unloadAll();
