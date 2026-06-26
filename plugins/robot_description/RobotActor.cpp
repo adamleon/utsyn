@@ -152,6 +152,8 @@ void RobotActor::rebuild() {
     }
     robot_  = robot;
     handle_ = scene().add(robot_);
+    robot_->showColliders(showCollision_); // URDFs ship visual + collision; hide the
+                                           // collision wireframe by default like rviz
 
     buildJointMap();
     const std::size_t dof = robot_->numDOF();
@@ -237,7 +239,17 @@ void RobotActor::onInspector() {
     }
 
     ImGui::Separator();
-    ImGui::Checkbox("Manual joint control", &manualMode_);
+    if (ImGui::Checkbox("Show collision geometry", &showCollision_) && robot_) {
+        robot_->showColliders(showCollision_);
+    }
+    if (ImGui::Checkbox("Manual joint control", &manualMode_) && manualMode_ && robot_) {
+        // Seed the sliders from the robot's current pose so manual mode resumes from
+        // wherever live data left it, instead of snapping back to stale manual values.
+        const std::size_t n = std::min(manual_.size(), robot_->numDOF());
+        for (std::size_t i = 0; i < n; ++i) {
+            manual_[i] = robot_->getJointValue(i, /*deg=*/false);
+        }
+    }
     if (!robot_) {
         return;
     }
@@ -254,7 +266,12 @@ void RobotActor::onInspector() {
             hi = revolute ? 180.0f : 1.0f;
         }
 
-        float disp = revolute ? threepp::math::radToDeg(manual_[i]) : manual_[i];
+        // Show the manual target while editing; otherwise mirror the robot's live joint
+        // value (driven by /joint_states) so the readout actually tracks the robot
+        // instead of sitting at the never-updated manual value.
+        float disp = manualMode_
+                             ? (revolute ? threepp::math::radToDeg(manual_[i]) : manual_[i])
+                             : robot_->getJointValue(i, /*deg=*/revolute);
         char  label[80];
         std::snprintf(label, sizeof(label), "%s (%s)##j%zu", info[i].name.c_str(),
                       revolute ? "deg" : "m", static_cast<std::size_t>(i));

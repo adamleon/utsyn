@@ -99,7 +99,10 @@ actor runs the URDF through a `PackageResolver` that rewrites `package://<pkg>/.
 URIs to absolute on-disk paths (threepp's loader otherwise can't resolve `package://`
 without a baseDir/package.xml to walk — and a wire-delivered URDF has neither). Verified
 both with ROS2 OFF (sample arm, 3 DOF, no meshes) and ROS2 ON against a live UR5e (6 DOF,
-mesh URIs resolved via `UTSYN_PACKAGE_PATH`). The interaction layer (selection / transform
+mesh URIs resolved via `UTSYN_PACKAGE_PATH`). Collision geometry is hidden by default
+(`Robot::showColliders(false)`, rviz-style) with an inspector toggle; the inspector joint
+sliders mirror the robot's live `getJointValue()` so they track incoming `/joint_states`
+(dragging one re-takes manual control). The interaction layer (selection / transform
 gizmos / picking) is deliberately deferred to a later layer.
 
 The still-stubbed modules (`LayoutManager`, `TfListener`, `TopicPlot`, `TfTree`)

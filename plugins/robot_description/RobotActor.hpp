@@ -61,9 +61,10 @@ private:
     std::string pendingUrdf_;
     std::string baseDir_;
     std::string lastUrdf_;
-    bool        urdfDirty_   = false;
-    bool        jointsDirty_ = false;
-    bool        manualMode_  = true;   // sliders drive until live joint data arrives
+    bool        urdfDirty_     = false;
+    bool        jointsDirty_   = false;
+    bool        manualMode_    = true;   // sliders drive until live joint data arrives
+    bool        showCollision_ = false;  // hide collision wireframe by default (rviz-style)
 
     std::vector<std::string> stagedNames_;
     std::vector<double>      stagedPositions_;
