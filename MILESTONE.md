@@ -44,9 +44,16 @@ build+runtime validated vs pixi ROS2 Jazzy; Vulkan blocked on SDK.
   primary, MSVC, C++20, `/W4 /WX`.
 - **`main` branch** has PR1 (ROS/plugin plumbing) + PR2 (MessageMonitor + robot_monitor),
   committed (commit `3c75828`).
-- **Everything since is UNCOMMITTED** on branch **`spike/threepp-shared`** (name is now a
-  misnomer — it carries the adopted work, not a throwaway). NOT pushed. Needs committing
-  in sensible chunks (rename the branch first).
+- **Now COMMITTED** on branch **`feat/robot-description`** (renamed from the old
+  `spike/threepp-shared`). 5 commits on top of `3c75828`: gitignore chore / terminal-ui
+  aesthetics / the big "live URDF robot" integration (shared threepp + SceneManager +
+  Actor + robot_description + PackageResolver + ROS-enable) / docs / collision-toggle +
+  live-joint-readout fix. **NOT pushed** — push is the user's call.
+- Two build trees:
+  - **`build/`** — Debug, **no-ROS** (UTSYN_ROS2 off), GL renderer. Day-to-day. Run:
+    `build\Debug\utsyn.exe`.
+  - **`build-ros/`** — Release, **ROS2 ON**, GL renderer. Built against pixi ROS2 Jazzy.
+    Run via the ROS env (below).
 - Two build trees:
   - **`build/`** — Debug, **no-ROS** (UTSYN_ROS2 off), GL renderer. Day-to-day. Run:
     `build\Debug\utsyn.exe`.
@@ -154,15 +161,16 @@ Renderer-agnostic Actors are unaffected; only Viewport/ViewportPanel/ImGui-init 
 
 1. ~~Visually verify the robot~~ — DONE (UR5e renders + articulates from live data).
 2. ~~Live ROS data test~~ — DONE (real UR5e over DDS, 6 DOF, 14/14 meshes resolved).
-   NEW next item: **visual/collision display toggle** — threepp's loader draws collision
-   meshes as white wireframe over the visual; add a per-Actor toggle (part of the deferred
-   display/interaction layer) so the UR shows clean solid like rviz.
-3. **Commit the uncommitted work** — rename `spike/threepp-shared` to something real,
-   commit in chunks (aesthetics / shared-threepp+SceneManager / Actor+robot_description /
-   ROS-enable CMake). Push is the user's call (kept prompting).
-4. **Interaction layer** (selection / transform gizmos / picking) — agreed as a SEPARATE
-   layer on top of Actors, deferred until after the robot is solid.
-5. **Vulkan swap** once the SDK is installed.
+3. ~~Commit the work~~ — DONE (branch `feat/robot-description`, 5 commits; NOT pushed).
+4. ~~Visual/collision toggle~~ — DONE (`Robot::showColliders(false)` by default + inspector
+   checkbox) AND fixed the inspector joint readout (was showing manual_=0, now mirrors the
+   live `getJointValue()`). **PENDING eyeball:** the machine locked during the rebuild, so
+   the SOLID render + live-tracking sliders are built/loaded but not yet screenshot-confirmed
+   — verify on unlock (build-ros utsyn is running; the UR demo too).
+5. **Push** `feat/robot-description` — user's call (kept unpushed).
+6. **Interaction layer** (selection / transform gizmos / picking) — separate layer on
+   top of Actors, deferred until after the robot is solid.
+7. **Vulkan swap** once the SDK is installed (see [[vulkan-renderer-plan]] / below).
 
 ## Gotchas / decisions to remember
 - Shared threepp + RTTI (above). ImGui is also single-instance in utsyn_core via
