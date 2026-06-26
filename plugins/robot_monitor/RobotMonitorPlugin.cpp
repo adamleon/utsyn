@@ -10,6 +10,7 @@
 #include "app/Logger.hpp"
 #include "plugins/IPlugin.hpp"
 #include "widgets/MessageMonitor.hpp"
+#include "widgets/TerminalUi.hpp"
 
 #include <imgui.h>
 
@@ -52,15 +53,15 @@ public:
         if (!open_) {
             return;
         }
-        if (ImGui::Begin("Robot Monitor", &open_)) {
+        if (ImGui::Begin("Robot Monitor", &open_, ImGuiWindowFlags_NoCollapse)) {
 #if !(defined(UTSYN_ROS2) && UTSYN_ROS2)
             ImGui::TextDisabled("Built without ROS2 - topics are inert (rows show OFF).");
-            ImGui::Separator();
+            ui::dashRule();
 #endif
             if (monitor_) {
                 monitor_->draw();
             }
-            ImGui::Separator();
+            ui::dashRule();
             ImGui::Text("Last joint state: %d joint(s)", lastJointCount_);
             ImGui::Text("URDF received: %s (%d bytes)",
                         urdfReceived_ ? "yes" : "no", urdfBytes_);

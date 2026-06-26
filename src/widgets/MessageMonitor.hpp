@@ -111,6 +111,7 @@ private:
         std::function<TopicHandle(TopicHandle, const std::string&)> resubscribe;
         std::array<float, kRateHistory> rateHistory{};
         std::size_t rateHead = 0;
+        bool        open = false;   // collapse state (we draw an ASCII marker, not ImGui's arrow)
     };
 
     void drawRow(Row& row, RowId id);

@@ -1,6 +1,7 @@
 #include "widgets/MessageMonitor.hpp"
 
 #include "app/Theme.hpp"
+#include "widgets/TerminalUi.hpp"
 
 #include <imgui.h>
 
@@ -201,7 +202,7 @@ void MessageMonitor::draw() {
     ImGui::PushStyleColor(ImGuiCol_Text, colorFor(stale > 0 ? worst : Disp::Live));
     ImGui::Text("MONITORS  %d live / %d degraded / %d idle", live, stale, other);
     ImGui::PopStyleColor();
-    ImGui::Separator();
+    ui::dashRule();
 
     for (std::size_t i = 0; i < rows_.size(); ++i) {
         if (!rows_[i].removed) {
@@ -224,19 +225,20 @@ void MessageMonitor::drawRow(Row& row, RowId id) {
     char right[64];
     rightText(right, sizeof(right), disp, stats, now);
 
-    // The whole status line is the colored CollapsingHeader label. The "###" gives
-    // a stable id (the row index) so the dynamic text never resets open/closed.
+    // The whole status line is one colored, full-width clickable row with an ASCII
+    // [+]/[-] marker (not ImGui's vector arrow). The "###" gives a stable id (the
+    // row index) so the dynamic text never resets the open/closed state.
     char header[320];
-    std::snprintf(header, sizeof(header), "%s  %-22s  %s###mmrow%zu",
-                  tokenFor(disp), row.label.c_str(), right,
-                  static_cast<std::size_t>(id));
+    std::snprintf(header, sizeof(header), "%s %s  %-22s  %s###mmrow%zu",
+                  ui::collapseMarker(row.open), tokenFor(disp), row.label.c_str(),
+                  right, static_cast<std::size_t>(id));
 
     ImGui::PushID(static_cast<int>(id));
     ImGui::PushStyleColor(ImGuiCol_Text, col);
-    const bool open = ImGui::CollapsingHeader(header);
+    ui::collapsibleRow(row.open, header);
     ImGui::PopStyleColor();
 
-    if (open) {
+    if (row.open) {
         ImGui::Indent();
 
         // Key/value grid.
@@ -273,16 +275,19 @@ void MessageMonitor::drawRow(Row& row, RowId id) {
                          static_cast<int>(row.rateHead), nullptr, 0.0f, FLT_MAX,
                          ImVec2(0.0f, plotH));
 
-        // Editable topic — the user can retarget which topic this row watches.
+        // Editable topic — the user can retarget which topic this row watches. The
+        // leading ">" reads as a terminal prompt.
+        ImGui::TextUnformatted(">");
+        ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.0f);
         ImGui::InputText("##topic", row.topicEdit.data(), row.topicEdit.size());
         ImGui::SameLine();
-        if (ImGui::Button("Set")) {
+        if (ImGui::Button("set")) {
             setTopic(id, std::string(row.topicEdit.data()));
         }
         if (row.userRemovable) {
             ImGui::SameLine();
-            if (ImGui::Button("Remove")) {
+            if (ImGui::Button("del")) {
                 remove(id);
             }
         }

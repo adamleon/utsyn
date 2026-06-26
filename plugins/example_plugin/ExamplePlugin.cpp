@@ -10,6 +10,7 @@
 
 #include "app/Logger.hpp"
 #include "plugins/IPlugin.hpp"
+#include "widgets/TerminalUi.hpp"
 
 #include <imgui.h>
 
@@ -31,9 +32,9 @@ public:
         if (!panelOpen_) {
             return;
         }
-        if (ImGui::Begin("Example Plugin", &panelOpen_)) {
+        if (ImGui::Begin("Example Plugin", &panelOpen_, ImGuiWindowFlags_NoCollapse)) {
             ImGui::TextUnformatted("Reference plugin online.");
-            ImGui::Separator();
+            ui::dashRule();
             ImGui::Text("Uptime: %.1f s", uptimeSeconds_);
             ImGui::Text("Frames: %llu",
                         static_cast<unsigned long long>(frameCount_));
