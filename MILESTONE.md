@@ -1,11 +1,14 @@
 # MILESTONE / RESUME — utsyn
 
 Working handoff so a fresh session can pick up. Read this + ARCHITECTURE.md first.
-Last updated: **LIVE ROS DATA → ROBOT VALIDATED.** utsyn (build-ros) received a real
-UR5e's `/robot_description` + `/joint_states` over DDS from a RoboStack Jazzy install,
-parsed to 6 DOF, resolved all 14 meshes (new `PackageResolver`), and rendered/articulated
-the arm. Robot eyeball-confirmed. Earlier: robot_description + Actor framework (GL); ROS2
-build+runtime validated vs pixi ROS2 Jazzy; Vulkan blocked on SDK.
+Last updated: **OPT-IN VULKAN BACKEND — dockable 3D viewport working.** utsyn now runs
+threepp's Vulkan deferred-hybrid renderer (`utsyn.exe --vulkan`, built when
+`UTSYN_WITH_VULKAN=ON`). The scene renders fullscreen (no offscreen target), so the 3D
+view is a dockable ImGui panel that samples the renderer's scene-color image through a new
+threepp accessor (`nativeSceneColorView`, on a local threepp fork). Camera nav, docking,
+and correct aspect all verified on the RTX 3090; GL path unchanged. Committed on branch
+`feat/vulkan-backend`. Prior milestone holds: live UR5e over DDS → robot rendered +
+articulated (GL), with `PackageResolver` resolving `package://` meshes.
 
 ## NEW since last session (uncommitted)
 - **`src/ros/PackageResolver.{hpp,cpp}`** (utsyn_core) — rewrites `package://pkg/...` mesh
@@ -44,21 +47,25 @@ build+runtime validated vs pixi ROS2 Jazzy; Vulkan blocked on SDK.
   primary, MSVC, C++20, `/W4 /WX`.
 - **`main` branch** has PR1 (ROS/plugin plumbing) + PR2 (MessageMonitor + robot_monitor),
   committed (commit `3c75828`).
-- **Now COMMITTED** on branch **`feat/robot-description`** (renamed from the old
-  `spike/threepp-shared`). 5 commits on top of `3c75828`: gitignore chore / terminal-ui
-  aesthetics / the big "live URDF robot" integration (shared threepp + SceneManager +
-  Actor + robot_description + PackageResolver + ROS-enable) / docs / collision-toggle +
-  live-joint-readout fix. **NOT pushed** — push is the user's call.
-- Two build trees:
-  - **`build/`** — Debug, **no-ROS** (UTSYN_ROS2 off), GL renderer. Day-to-day. Run:
+- **`feat/robot-description`** (renamed from `spike/threepp-shared`) — the live-URDF-robot
+  work: shared threepp + SceneManager + Actor + robot_description + PackageResolver +
+  ROS-enable + look-good pass. 8 commits on `3c75828`. **NOT pushed.**
+- **`feat/vulkan-backend`** — the opt-in Vulkan backend (this session), on top of
+  `feat/robot-description`. 5 commits: build-enable (`UTSYN_WITH_VULKAN` + VMA) /
+  dual-backend render path / panel docking / **dockable 3D viewport via the scene-color
+  accessor** / docs. **NOT pushed.**
+- **`D:\development\threepp`** — a standalone threepp clone, branch
+  `feat/vulkan-rendertarget` (commit `5e1b4414`): the ~33-line `nativeSceneColorView`
+  accessor. This is the pending **threepp PR**. `gh` is not installed → fork/push/PR is the
+  user's call.
+- Build trees:
+  - **`build/`** — Debug, **no-ROS** (UTSYN_ROS2 off), GL. Day-to-day. Run:
     `build\Debug\utsyn.exe`.
-  - **`build-ros/`** — Release, **ROS2 ON**, GL renderer. Built against pixi ROS2 Jazzy.
-    Run via the ROS env (below).
-- Two build trees:
-  - **`build/`** — Debug, **no-ROS** (UTSYN_ROS2 off), GL renderer. Day-to-day. Run:
-    `build\Debug\utsyn.exe`.
-  - **`build-ros/`** — Release, **ROS2 ON**, GL renderer. Built against pixi ROS2 Jazzy.
-    Run via the ROS env (below).
+  - **`build-ros/`** — Release, **ROS2 ON**, GL. Built against pixi ROS2 Jazzy. Run via the
+    ROS env (below).
+  - **`build-vk/`** — Debug, **Vulkan ON** (`UTSYN_WITH_VULKAN=ON`),
+    `FETCHCONTENT_SOURCE_DIR_THREEPP` → the `D:\development\threepp` clone. Needs
+    `VULKAN_SDK` set in the build env. Run: `build-vk\Debug\utsyn.exe --vulkan`.
 
 ---
 
@@ -145,34 +152,57 @@ and a latched `ros2 topic pub -r 1 --qos-durability transient_local /robot_descr
 
 ---
 
-## Vulkan renderer track — BLOCKED on SDK
+## Vulkan backend — DONE (opt-in), this session
 
-User wants the main renderer to be threepp's **Vulkan deferred-hybrid** (RenderMode::
-RasterFirst). GPU is **RTX 3090** (ideal). Blocker: **Vulkan SDK not installed**
-(VULKAN_SDK empty; threepp's THREEPP_WITH_VULKAN needs `find_package(Vulkan REQUIRED)`).
-User to install the LunarG SDK (vulkan.lunarg.com). Then it's a real rewrite (own spike):
-THREEPP_WITH_VULKAN=ON, Vulkan Canvas + VulkanRenderer, ImGui Vulkan backend
-(imgui_impl_vulkan), offscreen-viewport→VkDescriptorSet. See memory `vulkan-renderer-plan`.
-Renderer-agnostic Actors are unaffected; only Viewport/ViewportPanel/ImGui-init change.
+threepp's **Vulkan deferred-hybrid** renderer is wired as an opt-in backend on the RTX
+3090 (LunarG SDK 1.4.350.0). Build: `UTSYN_WITH_VULKAN=ON` (FetchContent-pulls VMA v3.1.0,
+`find_package(Vulkan)`, adds `imgui_impl_vulkan`, defines `THREEPP_WITH_VULKAN`). Run:
+`utsyn.exe --vulkan`.
+
+- **Build/run** (Debug, the `build-vk` tree, pointed at the threepp clone):
+  ```
+  cmake -S D:\development\utsyn -B D:\development\utsyn\build-vk -G "Visual Studio 17 2022" -A x64 ^
+    -DUTSYN_WITH_VULKAN=ON -DFETCHCONTENT_SOURCE_DIR_THREEPP=D:/development/threepp
+  $env:VULKAN_SDK='C:\VulkanSDK\1.4.350.0'   # must be set in the build env
+  cmake --build D:\development\utsyn\build-vk --config Debug --target utsyn --parallel
+  build-vk\Debug\utsyn.exe --vulkan
+  ```
+- **How it works:** the VulkanRenderer renders fullscreen (`setRenderTarget` is a stub).
+  utsyn exposes the renderer's per-frame scene-color image via a new threepp accessor
+  (`nativeSceneColorView` / `framesInFlight` / `currentSceneColorSlot`) and draws it in a
+  dockable "3D Viewport" panel (`VkScenePanel`: one `ImGui_ImplVulkan_AddTexture` descriptor
+  per in-flight slot, re-registered on resize). Camera aspect tracks the panel; orbit/pan
+  via an InvisibleButton over the image, zoom via threepp's wheel listener gated on hover.
+  See ARCHITECTURE.md "Vulkan Backend".
+- **Gotchas:** ImGui's Vulkan backend needs threepp's `ImguiContext` (not direct init) +
+  an explicit `ImGuiConfigFlags_DockingEnable` — `ImguiContext` doesn't set it, and that one
+  flag was why docking + central-area camera input were dead. Descriptor-pool validation
+  warnings (SAMPLER/SAMPLED_IMAGE not in threepp's COMBINED pool) are benign on NVIDIA. After
+  editing the threepp clone, MSBuild may think threepp is up-to-date — **touch** the changed
+  file to force the recompile. Kill any running `utsyn` before a build (it locks the DLLs).
+- **Remaining:** true per-panel-size offscreen + real multi-viewport need a working
+  `VulkanRenderer::setRenderTarget` (threepp Option B, weeks); the accessor (Option A) is the
+  shipped path. Push the threepp PR (`feat/vulkan-rendertarget`).
 
 ---
 
 ## NEXT STEPS (priority order)
 
-1. ~~Visually verify the robot~~ — DONE (UR5e renders + articulates from live data).
-2. ~~Live ROS data test~~ — DONE (real UR5e over DDS, 6 DOF, 14/14 meshes resolved).
-3. ~~Commit the work~~ — DONE (branch `feat/robot-description`, 5 commits; NOT pushed).
-4. ~~Visual/collision toggle + look-good pass~~ — DONE & **eyeball-confirmed good**.
-   `Robot::showColliders(false)` by default + inspector checkbox; inspector joint readout
-   fixed (mirrors live `getJointValue()`, was stuck at 0). Robot was rendering tiny+dim:
-   fixed framing (orbit `radius 12→3` around (0,0,0.4)) + a studio lighting rig (hemisphere
-   + warm key + cool fill + cool rim) in `Viewport.cpp`. Also fixed MessageMonitor status
-   tokens (bracket-hugging `[LIVE]`/`[LATCH]`, no stray padding). Commits `2e09e3b`,
-   `53fcd8c`, `0cef81e`.
-5. **Push** `feat/robot-description` — user's call (kept unpushed; 8 commits on top of `3c75828`).
-6. **Interaction layer** (selection / transform gizmos / picking) — separate layer on
-   top of Actors, deferred until after the robot is solid.
-7. **Vulkan swap** once the SDK is installed (see [[vulkan-renderer-plan]] / below).
+1–4. ~~Robot visual verify + live ROS data + commit + visual/collision look-good pass~~ —
+   all DONE (see git log on `feat/robot-description`; UR5e renders + articulates from live
+   data, studio lighting, monitor token fix).
+5. ~~Vulkan swap~~ — DONE this session (`feat/vulkan-backend`): opt-in deferred-hybrid
+   backend + dockable 3D viewport via the scene-color accessor. Verified on the RTX 3090.
+6. **Push** — nothing is pushed yet; all the user's call:
+   - `feat/robot-description` (robot work, 8 commits on `3c75828`)
+   - `feat/vulkan-backend` (Vulkan, 5 commits on `feat/robot-description`)
+   - the **threepp PR** from `D:\development\threepp` `feat/vulkan-rendertarget` (`5e1b4414`)
+     — `gh` not installed, so fork/push/open by hand.
+7. **Interaction layer** (selection / transform gizmos / picking) — separate layer on top
+   of Actors, deferred until after the robot is solid.
+8. **Vulkan multi-viewport / per-panel offscreen** — needs a real threepp
+   `VulkanRenderer::setRenderTarget` (Option B). The current accessor path mirrors a single
+   fullscreen render.
 
 ## Gotchas / decisions to remember
 - Shared threepp + RTTI (above). ImGui is also single-instance in utsyn_core via

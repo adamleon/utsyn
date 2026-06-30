@@ -3,14 +3,19 @@
 Current state of the system. Updated at the end of every session that changes structure, interfaces, or data flow.
 This describes what exists, not what is planned.
 
-Last updated: **live ROS2 data → robot is now validated end to end.** utsyn (ROS2 ON,
-GL renderer) received a real UR5e's latched `/robot_description` over DDS from a separate
-RoboStack Jazzy install, reparsed to 6 DOF, and articulated from live `/joint_states`.
-A new `PackageResolver` rewrites `package://` mesh URIs to absolute on-disk paths so the
-URDF's meshes load even when they live in a different ROS install than utsyn runs in.
-Scene injection (SceneManager) + Actor framework + robot_description plugin are built on a
-SHARED threepp. Most of this is uncommitted on branch `spike/threepp-shared`. See
-MILESTONE.md for the resume guide (pixi+ROS build commands, git state, next steps).
+Last updated: **opt-in Vulkan backend added — deferred-hybrid renderer + dockable 3D
+viewport.** Alongside the default OpenGL path, utsyn can now run threepp's Vulkan
+deferred-hybrid renderer (`utsyn.exe --vulkan`, compiled only when `UTSYN_WITH_VULKAN=ON`).
+That renderer draws the scene fullscreen (no offscreen target), so the 3D view is a
+**dockable ImGui panel** that samples the renderer's per-frame scene-color image through a
+new threepp accessor (`VulkanRenderer::nativeSceneColorView`, carried on a local threepp
+fork / pending PR). Camera nav, docking, and correct aspect all work under Vulkan; the GL
+path is unchanged. The earlier milestone still holds: **live ROS2 data → robot is validated
+end to end** — utsyn received a real UR5e's latched `/robot_description` over DDS from a
+separate RoboStack Jazzy install, reparsed to 6 DOF, and articulated from live
+`/joint_states`, with `PackageResolver` rewriting `package://` mesh URIs to absolute paths.
+Vulkan work is committed on branch `feat/vulkan-backend`. See MILESTONE.md for the resume
+guide (pixi+ROS build/run commands, git state, next steps).
 
 ---
 
@@ -116,7 +121,7 @@ Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 
 | Module | Location | Status | Purpose |
 |---|---|---|---|
-| Application | src/app/Application | BUILT | Window, ImGui dockspace + terminal style, render loop; wires the ROS/plugin backbone, runs plugin lifecycle, ordered shutdown |
+| Application | src/app/Application | BUILT | Window, ImGui dockspace + terminal style, render loop (GL default; opt-in Vulkan deferred-hybrid via `--vulkan`, scene-color shown in a dockable panel); wires the ROS/plugin backbone, runs plugin lifecycle, ordered shutdown |
 | LayoutManager | src/app/LayoutManager | STUB | Panel layout persistence (JSON) |
 | Logger | src/app/Logger | BUILT | Thread-safe singleton logger (info/warn/error + ring buffer, mirrors to stderr) |
 | Viewport | src/rendering/Viewport | BUILT | threepp scene + camera, rendered offscreen to a RenderTarget; exposes scene() for SceneManager (grid + axes only — demo meshes removed) |
@@ -264,6 +269,50 @@ can. Do not implement plugin viewport creation until this is decided.
 
 ---
 
+## Vulkan Backend (opt-in)
+
+A second render backend, off by default. Compiled only when the CMake option
+`UTSYN_WITH_VULKAN=ON` (which FetchContent-pulls VMA, `find_package(Vulkan)`s the SDK,
+builds `imgui_impl_vulkan` into `imgui_lib`, and defines `THREEPP_WITH_VULKAN` so
+threepp's Vulkan path + its `ImguiContext` Vulkan branch are active). Selected at runtime
+with `utsyn.exe --vulkan`. The OpenGL path is unchanged and remains the default; both
+backends share the same scene, plugins, and ROS backbone.
+
+**Dispatch.** `Application` owns a `unique_ptr<threepp::Renderer>` plus a non-owning
+`GLRenderer*` or `VulkanRenderer*`. `run(useVulkan)` builds one or the other;
+`frame()` dispatches to `frameVulkan()` under Vulkan. Unlike the GL path (which inits the
+ImGui GLFW+OpenGL3 backends directly), the Vulkan path **must** use threepp's
+`ImguiContext`: ImGui's Vulkan backend is driven inside threepp's present pass via an
+overlay callback, so utsyn renders the scene fullscreen then calls `vkUi_->render()`. It
+also explicitly sets `ImGuiConfigFlags_DockingEnable` (the GL `initImGui` does this;
+`ImguiContext` does not) — without it `DockSpaceOverViewport` is a no-op.
+
+**No offscreen target.** threepp's `VulkanRenderer` is a fullscreen deferred-hybrid
+renderer; `setRenderTarget()` is a stub. So the scene is always rendered fullscreen to the
+swapchain and the dockspace is opaque to hide that present. The **3D view is a dockable
+ImGui panel** that displays the scene by sampling the renderer's final scene-color image
+(the denoise output that feeds TAA — a SAMPLED BGRA8 image in `VK_IMAGE_LAYOUT_GENERAL`,
+ping-ponged across in-flight slots) exposed through a new threepp accessor:
+`nativeSceneColorView(slot)` / `framesInFlight()` / `currentSceneColorSlot()`.
+
+**VkScenePanel** (a small struct in `Application.cpp`) caches one
+`ImGui_ImplVulkan_AddTexture` descriptor per in-flight scene-color slot — re-registering a
+slot when its `VkImageView` changes (a window resize recreates the renderer's images) —
+and draws the current slot with `ImGui::Image`. The camera aspect tracks the panel's
+content size (one frame of lag, since the panel is measured in `renderUi` which runs after
+the render); camera input is an InvisibleButton over the image (orbit/pan) plus the threepp
+wheel listener gated on panel hover (zoom), mirroring the GL `ViewportPanel`. Because the
+render is fullscreen, the panel mirrors a window-resolution render — correct for one
+viewport; true per-panel-size offscreen (and real multi-viewport) would need a working
+`setRenderTarget` (deferred).
+
+**threepp dependency.** The accessor is not in upstream threepp. The Vulkan build points
+`FETCHCONTENT_SOURCE_DIR_THREEPP` at a local clone (branch `feat/vulkan-rendertarget`)
+carrying the ~33-line addition; a PR to threepp is pending. A default (GL-only) build needs
+no threepp fork.
+
+---
+
 ## Threading Model
 
 | Thread | Responsibility |
@@ -313,6 +362,9 @@ ImGui docking `.ini` state may be stored separately or unified — open decision
 | Plugin ABI gate | `UTSYN_PLUGIN_ABI_VERSION` + exported `utsynPluginAbiVersion()`; loader rejects mismatches | Detects stale plugins. Does NOT cover CRT/build-config mismatch — plugins must share utsyn_core's toolchain+config |
 | Registry mutation thread | acquire/release/attachDrainer/pump/clear are render-thread-only (asserted); slot reuse via a free-list + handle generation | Keeps plain-int refcounts race-free; generation invalidates stale handles to reused slots |
 | URDF mesh resolution | `PackageResolver` rewrites `package://` → absolute paths (string transform) before threepp parses the URDF; search roots from `UTSYN_PACKAGE_PATH` / `AMENT_PREFIX_PATH` / `ROS_PACKAGE_PATH` | threepp's loader only resolves `package://` by walking up to a `package.xml` from a baseDir; a URDF arriving over the wire has neither, so meshes drop silently. Env-driven roots decouple "where the robot's packages live on disk" from "which ROS env utsyn runs in" |
+| Vulkan backend | Opt-in: CMake `UTSYN_WITH_VULKAN=ON` (build) + `--vulkan` (runtime); GL is the default | threepp's Vulkan path is a fullscreen deferred-hybrid renderer with extra deps (Vulkan SDK, VMA); keeping it opt-in leaves the default build/CI lean and GL-only |
+| Vulkan ImGui integration | threepp's `ImguiContext` (not direct backend init like GL), with an explicit `ImGuiConfigFlags_DockingEnable` | ImGui's Vulkan backend is driven through threepp's present pass via an overlay callback, so the GL "init the backends directly" approach doesn't apply; `ImguiContext` doesn't enable docking, so utsyn must |
+| Vulkan 3D view | Sample the renderer's scene-color image into a dockable ImGui panel via a new threepp accessor — not an offscreen RenderTarget | `VulkanRenderer::setRenderTarget` is a stub, but the final scene color already lives in a SAMPLED image; exposing a view of it (Option A, ~33 lines) gives a dockable viewport in days vs. a full offscreen path (Option B) in weeks. Cost: the panel mirrors a window-resolution render, and true multi-viewport still needs Option B |
 
 ---
 
@@ -331,6 +383,10 @@ ImGui docking `.ini` state may be stored separately or unified — open decision
   today `release()`/`clear()` assume the ROS thread is stopped. Needs an
   executor-synchronized teardown before a plugin retargets a topic at runtime.
 - Monitor-only generic (type-string) subscriptions for a future topic-browser.
-- robot_description plugin (URDF load + joint-state animation) — the end goal.
-- OpenBridge widget layer; Vulkan path tracer; plugin config persistence;
-  multi-robot tf namespacing — all deferred.
+- **Vulkan offscreen / true multi-viewport** — the Vulkan backend renders fullscreen
+  and mirrors the scene-color image into one dockable panel; `VulkanRenderer::setRenderTarget`
+  is still a stub, so per-panel-size rendering and N independent Vulkan viewports don't
+  exist yet. The scene-color accessor it depends on is a local threepp fork
+  (`feat/vulkan-rendertarget`) pending an upstream PR.
+- OpenBridge widget layer; plugin config persistence; multi-robot tf namespacing —
+  all deferred.
