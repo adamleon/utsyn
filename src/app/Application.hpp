@@ -4,8 +4,18 @@
 
 namespace threepp {
 class Canvas;
+class Renderer;
 class GLRenderer;
+class PerspectiveCamera;
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+class VulkanRenderer;
+struct MouseListener;
+#endif
 } // namespace threepp
+
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+class ImguiContext; // threepp's ImGui helper (global namespace, in extras/imgui)
+#endif
 
 namespace utsyn {
 
@@ -29,17 +39,30 @@ public:
     Application& operator=(const Application&) = delete;
 
     // Open the window and run the render loop until the window is closed.
-    void run();
+    // useVulkan selects the threepp Vulkan deferred-hybrid backend (fullscreen +
+    // ImGui overlay); the default OpenGL path keeps the docked multi-viewport.
+    void run(bool useVulkan = false);
 
 private:
     void initImGui();
     void applyTerminalStyle();
-    void frame();      // one render-loop iteration
+    void frame();      // one render-loop iteration (dispatches GL vs Vulkan)
     void renderUi();   // build the ImGui frame (dockspace, panels, plugin UI)
     void shutdown() noexcept; // orderly teardown: stop ROS -> clear broker -> unload plugins
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+    void frameVulkan(); // fullscreen scene render + ImGui overlay
+#endif
 
     std::unique_ptr<threepp::Canvas>      canvas_;
-    std::unique_ptr<threepp::GLRenderer>  renderer_;
+    std::unique_ptr<threepp::Renderer>    renderer_;     // GLRenderer or VulkanRenderer
+    threepp::GLRenderer*                  glRenderer_ = nullptr; // non-owning view, GL only
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+    threepp::VulkanRenderer*              vkRenderer_ = nullptr; // non-owning view, Vulkan only
+    std::unique_ptr<ImguiContext>         vkUi_;                 // Vulkan ImGui (threepp helper)
+    std::unique_ptr<threepp::MouseListener> vkWheel_;           // scroll -> camera zoom
+    bool                                  vkStyleApplied_ = false;
+#endif
+    bool                                  useVulkan_ = false;
 
     // ROS / plugin backbone. Declaration order matters for destruction: plugins
     // and the broker tear down before the registry, which tears down before

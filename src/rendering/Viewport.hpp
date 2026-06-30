@@ -53,6 +53,11 @@ public:
     // can add/remove objects (the Viewport keeps ownership of the scene).
     [[nodiscard]] threepp::Scene& scene() noexcept;
 
+    // The viewport's orbit camera. Exposed so a fullscreen renderer (the Vulkan
+    // backend, which has no offscreen render-target support) can render this
+    // viewport's scene directly to the window instead of through the panel texture.
+    [[nodiscard]] threepp::PerspectiveCamera& camera() noexcept;
+
 private:
     // Recompute the camera position from the orbit parameters (target,
     // radius, azimuth, elevation) and point it at the target.

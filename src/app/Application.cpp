@@ -14,19 +14,51 @@
 #include <threepp/canvas/Canvas.hpp>
 #include <threepp/canvas/Monitor.hpp>
 #include <threepp/renderers/GLRenderer.hpp>
+#include <threepp/renderers/Renderer.hpp>
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+#  include <threepp/cameras/PerspectiveCamera.hpp>
+#  include <threepp/extras/imgui/ImguiContext.hpp>
+#  include <threepp/input/MouseListener.hpp>
+#  include <threepp/renderers/VulkanRenderer.hpp>
+#  include <threepp/scenes/Scene.hpp> // complete type: Scene -> Object3D upcast for render()
+#endif
+
 #include <string>
 
 namespace utsyn {
+
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+namespace {
+// Bridges threepp's mouse-wheel events to a callback. Under the Vulkan canvas
+// ImGui's io.MouseWheel doesn't receive the scroll, so the camera zoom is driven
+// off threepp's own input system instead (the same path OrbitControls uses).
+struct WheelListener final : threepp::MouseListener {
+    std::function<void(float)> cb;
+    void onMouseWheel(const threepp::Vector2& delta) override {
+        if (cb) {
+            cb(delta.y);
+        }
+    }
+};
+} // namespace
+#endif
 
 Application::Application() = default;
 
 Application::~Application() {
     shutdown(); // backstop; normally already done at the end of run()
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+    // Tear down the Vulkan ImGui context BEFORE the renderer: its destructor does
+    // vkDeviceWaitIdle + ImGui_ImplVulkan_Shutdown using the renderer's device (and
+    // also ImGui::DestroyContext). renderer_ is still alive here — it's a member,
+    // destroyed after this body runs.
+    vkUi_.reset();
+#endif
     if (imguiInitialized_) {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
@@ -35,8 +67,9 @@ Application::~Application() {
     }
 }
 
-void Application::run() {
+void Application::run(bool useVulkan) {
     using namespace threepp;
+    useVulkan_ = useVulkan;
 
     canvas_ = std::make_unique<Canvas>(
             Canvas::Parameters()
@@ -46,12 +79,44 @@ void Application::run() {
                     // We drive quitting through the UI, not the Escape key.
                     .exitOnKeyEscape(false));
 
-    // Constructing the GL renderer with the canvas initialises the window's
-    // OpenGL context, which ImGui's backend needs to exist first.
-    renderer_ = std::make_unique<GLRenderer>(*canvas_);
+    // DPI scale from the primary monitor — both backends derive UI sizes from it.
+    dpiScale_ = monitor::contentScale().first;
+    if (dpiScale_ <= 0.0f) {
+        dpiScale_ = 1.0f;
+    }
 
-    initImGui();
-    applyTerminalStyle();
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+    if (useVulkan_) {
+        // Constructing the VulkanRenderer switches the canvas to Vulkan and brings
+        // up the instance/device/swapchain. threepp's ImguiContext wires ImGui to
+        // the renderer's native handles + a per-frame overlay callback that draws
+        // the panels inside the present pass. The scene renders fullscreen — there
+        // is no offscreen render target (setRenderTarget is a stub), so the docked
+        // viewport panel is GL-only.
+        auto vk     = std::make_unique<VulkanRenderer>(*canvas_);
+        vkRenderer_ = vk.get();
+        renderer_   = std::move(vk);
+        vkUi_       = std::make_unique<ImguiFunctionalContext>(
+                *canvas_, *vkRenderer_, [this] { renderUi(); });
+        Logger::instance().info("Application: Vulkan backend (deferred-hybrid, fullscreen overlay)");
+    }
+#else
+    if (useVulkan_) {
+        Logger::instance().error(
+                "Application: --vulkan requested but built without UTSYN_WITH_VULKAN; using OpenGL");
+        useVulkan_ = false;
+    }
+#endif
+
+    if (!useVulkan_) {
+        // OpenGL (default). Constructing the GL renderer initialises the window's
+        // OpenGL context, which ImGui's backend needs to exist first.
+        auto gl     = std::make_unique<GLRenderer>(*canvas_);
+        glRenderer_ = gl.get();
+        renderer_   = std::move(gl);
+        initImGui();
+        applyTerminalStyle();
+    }
 
     // ROS / plugin backbone. RosCore comes up first (its node backs every
     // subscription); without ROS2 it is inert. The registry + broker provide the
@@ -68,6 +133,22 @@ void Application::run() {
     Viewport& vp = viewports_->create();
     scene_->bindScene(kPrimaryViewport, vp.scene());
     viewportPanel_ = std::make_unique<ViewportPanel>("3D Viewport", vp);
+
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+    if (useVulkan_) {
+        // Drive camera zoom off threepp's mouse-wheel events (ImGui's io.MouseWheel
+        // doesn't receive the scroll under the Vulkan canvas). Skip when the cursor
+        // is over a panel so scrolling a list doesn't also zoom the scene.
+        auto wheel = std::make_unique<WheelListener>();
+        wheel->cb  = [this](float dy) {
+            if (!ImGui::GetIO().WantCaptureMouse) {
+                viewports_->at(0).dolly(dy);
+            }
+        };
+        canvas_->addMouseListener(*wheel);
+        vkWheel_ = std::move(wheel);
+    }
+#endif
 
     // One PluginContext shared by all plugins. Its references must outlive every
     // plugin, so it is built after the collaborators and torn down before them.
@@ -152,6 +233,14 @@ void Application::applyTerminalStyle() {
 }
 
 void Application::frame() {
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+    if (useVulkan_) {
+        frameVulkan();
+        return;
+    }
+#endif
+
+    // ---- OpenGL path (unchanged) ----
     renderer_->clear();
 
     ImGui_ImplOpenGL3_NewFrame();
@@ -176,10 +265,69 @@ void Application::frame() {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+void Application::frameVulkan() {
+    Viewport& vp = viewports_->at(0);
+
+    // dt is the previous frame's value (ImGui updates it during ImguiContext::
+    // render()'s NewFrame, which runs below) — fine for plugin scene updates.
+    const float dt = ImGui::GetIO().DeltaTime;
+
+    broker_->pump();
+    plugins_->onSceneUpdate(dt);
+    for (std::size_t i = 0; i < viewports_->count(); ++i) {
+        viewports_->at(i).update(dt);
+    }
+
+    // Camera navigation over the fullscreen scene — same gestures as the GL
+    // ViewportPanel, but driven by the global ImGui IO when the cursor isn't over a
+    // panel (WantCaptureMouse). The IO values are from the previous frame's
+    // NewFrame (vkUi_->render() runs NewFrame below), i.e. one frame of lag.
+    const ImGuiIO& io = ImGui::GetIO();
+    if (!io.WantCaptureMouse) {
+        const ImVec2 d = io.MouseDelta;
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            vp.orbit(-d.x * 0.01f, -d.y * 0.01f); // left drag: orbit (~0.01 rad/px)
+        } else if (ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
+                   ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+            vp.pan(d.x, d.y); // right/middle drag: pan
+        }
+        // Wheel zoom is handled by the threepp MouseListener (vkWheel_) — ImGui's
+        // io.MouseWheel doesn't get the scroll under the Vulkan canvas.
+    }
+
+    // Match the camera aspect to the fullscreen window.
+    const auto sz = vkRenderer_->size();
+    if (sz.height() > 0) {
+        vp.camera().aspect =
+                static_cast<float>(sz.width()) / static_cast<float>(sz.height());
+        vp.camera().updateProjectionMatrix();
+    }
+
+    // Render the primary viewport's scene fullscreen (deferred-hybrid).
+    // vkUi_->render() builds the panels (renderUi) and the renderer's overlay
+    // callback draws them on top, inside the present pass.
+    vkRenderer_->render(vp.scene(), vp.camera());
+    vkUi_->render();
+
+    // ImguiContext::render() resets ImGuiStyle on its first call (DPI setup), which
+    // wipes the terminal palette — re-apply it once after that first frame.
+    if (!vkStyleApplied_) {
+        applyTerminalStyle();
+        vkStyleApplied_ = true;
+    }
+}
+#endif
+
 void Application::renderUi() {
-    // Full-window dockspace so panels (built-in widgets, plugin panels) can
-    // dock against the edges. Plugins will render into this in onImGui().
-    ImGui::DockSpaceOverViewport();
+    // Full-window dockspace (GL path) so panels dock against the edges. Under Vulkan
+    // the scene fills the window behind ImGui; a PassthruCentralNode dockspace still
+    // captured the mouse over the central area (breaking scene orbit/pan/zoom), so we
+    // skip the dockspace and let the panels float over the scene. Docking under Vulkan
+    // is a TODO (needs a dockspace that genuinely passes input through to the camera).
+    if (!useVulkan_) {
+        ImGui::DockSpaceOverViewport();
+    }
 
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -198,13 +346,17 @@ void Application::renderUi() {
                     static_cast<double>(ImGui::GetIO().Framerate),
                     1000.0 / static_cast<double>(ImGui::GetIO().Framerate));
         ImGui::Text("DPI scale: %.2f", static_cast<double>(dpiScale_));
+        ImGui::Text("Renderer: %s", useVulkan_ ? "Vulkan (deferred-hybrid)" : "OpenGL");
         ImGui::Text("ROS2: %s", rosCore_->rosEnabled() ? "enabled" : "disabled (UTSYN_ROS2 off)");
         ImGui::TextDisabled("Plugins loaded: %llu",
                             static_cast<unsigned long long>(plugins_->count()));
     }
     ImGui::End();
 
-    viewportPanel_->onImGui(*renderer_);
+    // Docked offscreen viewport — GL only (under Vulkan the scene renders fullscreen).
+    if (!useVulkan_) {
+        viewportPanel_->onImGui(*glRenderer_);
+    }
 
     // Plugin panels render into the dockspace via their own ImGui::Begin/End.
     plugins_->onImGui();

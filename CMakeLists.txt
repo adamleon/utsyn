@@ -255,10 +255,14 @@ endif()
 target_link_libraries(utsyn_core PUBLIC ${CMAKE_DL_LIBS})
 target_link_libraries(utsyn_core PRIVATE utsyn_warnings)
 
-# Vulkan backend define (PUBLIC so the app + plugins can #if UTSYN_WITH_VULKAN).
-# threepp's Vulkan::Vulkan link requirement propagates transitively from threepp.
+# Vulkan backend defines. UTSYN_WITH_VULKAN (PUBLIC) gates utsyn's own code +
+# Application.hpp member layout (app + plugins must agree). THREEPP_WITH_VULKAN
+# (PRIVATE — only Application.cpp includes the header that needs it) activates the
+# Vulkan branch in threepp's ImguiContext.hpp; threepp defines it only PRIVATE to
+# itself, so a consumer that uses ImguiContext's Vulkan path must define it too.
 if(UTSYN_WITH_VULKAN)
     target_compile_definitions(utsyn_core PUBLIC UTSYN_WITH_VULKAN=1)
+    target_compile_definitions(utsyn_core PRIVATE THREEPP_WITH_VULKAN=1)
 endif()
 
 if(ROS2_AVAILABLE)

@@ -99,6 +99,10 @@ threepp::Scene& Viewport::scene() noexcept {
     return *scene_;
 }
 
+threepp::PerspectiveCamera& Viewport::camera() noexcept {
+    return *camera_;
+}
+
 void Viewport::orbit(float dAzimuth, float dElevation) {
     azimuth_ += dAzimuth;
     elevation_ += dElevation;
