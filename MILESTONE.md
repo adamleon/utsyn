@@ -162,12 +162,14 @@ Renderer-agnostic Actors are unaffected; only Viewport/ViewportPanel/ImGui-init 
 1. ~~Visually verify the robot~~ — DONE (UR5e renders + articulates from live data).
 2. ~~Live ROS data test~~ — DONE (real UR5e over DDS, 6 DOF, 14/14 meshes resolved).
 3. ~~Commit the work~~ — DONE (branch `feat/robot-description`, 5 commits; NOT pushed).
-4. ~~Visual/collision toggle~~ — DONE (`Robot::showColliders(false)` by default + inspector
-   checkbox) AND fixed the inspector joint readout (was showing manual_=0, now mirrors the
-   live `getJointValue()`). **PENDING eyeball:** the machine locked during the rebuild, so
-   the SOLID render + live-tracking sliders are built/loaded but not yet screenshot-confirmed
-   — verify on unlock (build-ros utsyn is running; the UR demo too).
-5. **Push** `feat/robot-description` — user's call (kept unpushed).
+4. ~~Visual/collision toggle + look-good pass~~ — DONE & **eyeball-confirmed good**.
+   `Robot::showColliders(false)` by default + inspector checkbox; inspector joint readout
+   fixed (mirrors live `getJointValue()`, was stuck at 0). Robot was rendering tiny+dim:
+   fixed framing (orbit `radius 12→3` around (0,0,0.4)) + a studio lighting rig (hemisphere
+   + warm key + cool fill + cool rim) in `Viewport.cpp`. Also fixed MessageMonitor status
+   tokens (bracket-hugging `[LIVE]`/`[LATCH]`, no stray padding). Commits `2e09e3b`,
+   `53fcd8c`, `0cef81e`.
+5. **Push** `feat/robot-description` — user's call (kept unpushed; 8 commits on top of `3c75828`).
 6. **Interaction layer** (selection / transform gizmos / picking) — separate layer on
    top of Actors, deferred until after the robot is solid.
 7. **Vulkan swap** once the SDK is installed (see [[vulkan-renderer-plan]] / below).
