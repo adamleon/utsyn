@@ -21,6 +21,9 @@ namespace utsyn {
 
 class ViewportManager;
 class ViewportPanel;
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+struct VkScenePanel; // Vulkan scene-color -> ImGui descriptor cache (defined in Application.cpp)
+#endif
 class RosCore;
 class SceneManager;
 class SubscriptionRegistry;
@@ -51,7 +54,6 @@ private:
     void shutdown() noexcept; // orderly teardown: stop ROS -> clear broker -> unload plugins
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
     void frameVulkan(); // fullscreen scene render + ImGui overlay
-    [[nodiscard]] bool mouseInCentral(float x, float y) const; // cursor over the scene area
 #endif
 
     std::unique_ptr<threepp::Canvas>      canvas_;
@@ -62,11 +64,9 @@ private:
     std::unique_ptr<ImguiContext>         vkUi_;                 // Vulkan ImGui (threepp helper)
     std::unique_ptr<threepp::MouseListener> vkWheel_;           // scroll -> camera zoom
     bool                                  vkStyleApplied_ = false;
-    // Central dockspace-node rect (window coords) under Vulkan; camera input is
-    // active only when the cursor is over it (the scene area showing through the
-    // passthrough central node), not over a docked/floating panel.
-    float                                 vkCentralX_ = 0.0f, vkCentralY_ = 0.0f;
-    float                                 vkCentralW_ = 0.0f, vkCentralH_ = 0.0f;
+    std::unique_ptr<VkScenePanel>         vkScenePanel_; // scene-color image -> ImGui::Image
+    float                                 vkPanelW_ = 0.0f, vkPanelH_ = 0.0f; // 3D Viewport panel size -> camera aspect
+    bool                                  vkPanelHovered_ = false;            // 3D Viewport panel hovered (wheel zoom)
 #endif
     bool                                  useVulkan_ = false;
 

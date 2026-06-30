@@ -21,7 +21,7 @@
 #include <imgui_impl_opengl3.h>
 
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
-#  include <imgui_internal.h> // ImGuiDockNode + DockBuilderGetCentralNode (passthrough dockspace)
+#  include <imgui_impl_vulkan.h> // ImGui_ImplVulkan_AddTexture/RemoveTexture (scene-color -> ImGui::Image)
 #  include <threepp/cameras/PerspectiveCamera.hpp>
 #  include <threepp/extras/imgui/ImguiContext.hpp>
 #  include <threepp/input/MouseListener.hpp>
@@ -30,6 +30,7 @@
 #endif
 
 #include <string>
+#include <vector>
 
 namespace utsyn {
 
@@ -47,6 +48,61 @@ struct WheelListener final : threepp::MouseListener {
     }
 };
 } // namespace
+
+// Caches an ImGui_ImplVulkan descriptor per scene-color slot so the rendered scene
+// can be drawn as an ImGui::Image. A slot's descriptor is (re)registered whenever its
+// VkImageView changes — e.g. a window resize recreates the renderer's images.
+struct VkScenePanel {
+    VkDevice                     device  = VK_NULL_HANDLE;
+    VkSampler                    sampler = VK_NULL_HANDLE;
+    std::vector<VkImageView>     regView; // currently-registered view per slot
+    std::vector<VkDescriptorSet> sets;    // ImGui descriptor per slot
+
+    VkScenePanel(VkDevice dev, uint32_t slots)
+        : device(dev), regView(slots, VK_NULL_HANDLE), sets(slots, VK_NULL_HANDLE) {
+        VkSamplerCreateInfo si{};
+        si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter    = VK_FILTER_LINEAR;
+        si.minFilter    = VK_FILTER_LINEAR;
+        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.maxLod       = 1.0f;
+        vkCreateSampler(device, &si, nullptr, &sampler);
+    }
+    ~VkScenePanel() {
+        if (!device) {
+            return;
+        }
+        vkDeviceWaitIdle(device); // descriptors/sampler must be idle before teardown
+        for (VkDescriptorSet s : sets) {
+            if (s) {
+                ImGui_ImplVulkan_RemoveTexture(s);
+            }
+        }
+        if (sampler) {
+            vkDestroySampler(device, sampler, nullptr);
+        }
+    }
+    VkScenePanel(const VkScenePanel&)            = delete;
+    VkScenePanel& operator=(const VkScenePanel&) = delete;
+
+    // ImGui texture id for `slot`, (re)registering the descriptor if the view changed.
+    // Returns a null id if the view isn't available.
+    ImTextureID texture(uint32_t slot, VkImageView view) {
+        if (view == VK_NULL_HANDLE || slot >= sets.size()) {
+            return ImTextureID{};
+        }
+        if (regView[slot] != view) {
+            if (sets[slot]) {
+                ImGui_ImplVulkan_RemoveTexture(sets[slot]);
+            }
+            sets[slot]    = ImGui_ImplVulkan_AddTexture(sampler, view, VK_IMAGE_LAYOUT_GENERAL);
+            regView[slot] = view;
+        }
+        return reinterpret_cast<ImTextureID>(sets[slot]);
+    }
+};
 #endif
 
 Application::Application() = default;
@@ -54,6 +110,9 @@ Application::Application() = default;
 Application::~Application() {
     shutdown(); // backstop; normally already done at the end of run()
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+    // Scene-panel descriptors/sampler first — they need the ImGui-Vulkan backend
+    // (vkUi_) and the device (renderer_) still alive.
+    vkScenePanel_.reset();
     // Tear down the Vulkan ImGui context BEFORE the renderer: its destructor does
     // vkDeviceWaitIdle + ImGui_ImplVulkan_Shutdown using the renderer's device (and
     // also ImGui::DestroyContext). renderer_ is still alive here — it's a member,
@@ -104,6 +163,11 @@ void Application::run(bool useVulkan) {
         // is a no-op: panels can't dock and the central node has no rect (which the
         // camera gate needs). The GL path is unaffected.
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        // Scene-color -> ImGui::Image descriptor cache (uses the renderer's native
+        // device + the ImGui-Vulkan backend that vkUi_ just initialised).
+        vkScenePanel_ = std::make_unique<VkScenePanel>(
+                static_cast<VkDevice>(vkRenderer_->nativeDevice()),
+                vkRenderer_->framesInFlight());
         Logger::instance().info("Application: Vulkan backend (deferred-hybrid, fullscreen overlay)");
     }
 #else
@@ -143,12 +207,11 @@ void Application::run(bool useVulkan) {
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
     if (useVulkan_) {
         // Drive camera zoom off threepp's mouse-wheel events (ImGui's io.MouseWheel
-        // doesn't receive the scroll under the Vulkan canvas). Skip when the cursor
-        // is over a panel so scrolling a list doesn't also zoom the scene.
+        // doesn't receive the scroll under the Vulkan canvas). Only zoom when the
+        // cursor is over the 3D Viewport panel (set in renderUi).
         auto wheel = std::make_unique<WheelListener>();
         wheel->cb  = [this](float dy) {
-            const ImGuiIO& io = ImGui::GetIO();
-            if (mouseInCentral(io.MousePos.x, io.MousePos.y) && !io.WantCaptureMouse) {
+            if (vkPanelHovered_) {
                 viewports_->at(0).dolly(dy);
             }
         };
@@ -286,28 +349,21 @@ void Application::frameVulkan() {
         viewports_->at(i).update(dt);
     }
 
-    // Camera navigation over the fullscreen scene — same gestures as the GL
-    // ViewportPanel, but driven by the global ImGui IO when the cursor isn't over a
-    // panel (WantCaptureMouse). The IO values are from the previous frame's
-    // NewFrame (vkUi_->render() runs NewFrame below), i.e. one frame of lag.
-    const ImGuiIO& io = ImGui::GetIO();
-    if (mouseInCentral(io.MousePos.x, io.MousePos.y) && !io.WantCaptureMouse) {
-        const ImVec2 d = io.MouseDelta;
-        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            vp.orbit(-d.x * 0.01f, -d.y * 0.01f); // left drag: orbit (~0.01 rad/px)
-        } else if (ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
-                   ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
-            vp.pan(d.x, d.y); // right/middle drag: pan
-        }
-        // Wheel zoom is handled by the threepp MouseListener (vkWheel_) — ImGui's
-        // io.MouseWheel doesn't get the scroll under the Vulkan canvas.
-    }
+    // Camera navigation is driven by the "3D Viewport" panel (renderUi, below) via an
+    // InvisibleButton over the scene image — the same gestures as the GL ViewportPanel.
 
-    // Match the camera aspect to the fullscreen window.
-    const auto sz = vkRenderer_->size();
-    if (sz.height() > 0) {
-        vp.camera().aspect =
-                static_cast<float>(sz.width()) / static_cast<float>(sz.height());
+    // Match the camera aspect to that panel so the scene fills it without distortion.
+    // The panel size is measured in renderUi() (which runs below, inside vkUi_->
+    // render()), so this uses last frame's value — one frame of lag. Fall back to the
+    // window aspect until the panel has been drawn once.
+    float aspect = 0.0f;
+    if (vkPanelW_ > 0.0f && vkPanelH_ > 0.0f) {
+        aspect = vkPanelW_ / vkPanelH_;
+    } else if (const auto sz = vkRenderer_->size(); sz.height() > 0) {
+        aspect = static_cast<float>(sz.width()) / static_cast<float>(sz.height());
+    }
+    if (aspect > 0.0f) {
+        vp.camera().aspect = aspect;
         vp.camera().updateProjectionMatrix();
     }
 
@@ -324,33 +380,14 @@ void Application::frameVulkan() {
         vkStyleApplied_ = true;
     }
 }
-
-bool Application::mouseInCentral(float x, float y) const {
-    // The central-node rect is updated in renderUi() (one frame ago, since renderUi
-    // runs inside vkUi_->render() after this); a frame of lag is fine.
-    return vkCentralW_ > 0.0f && vkCentralH_ > 0.0f && x >= vkCentralX_ &&
-           x < vkCentralX_ + vkCentralW_ && y >= vkCentralY_ && y < vkCentralY_ + vkCentralH_;
-}
 #endif
 
 void Application::renderUi() {
-    // Full-window dockspace so panels dock against the edges. Under Vulkan the scene
-    // fills the window behind ImGui, so use a PassthruCentralNode dockspace: panels
-    // dock to the edges while the central node stays transparent (the fullscreen scene
-    // shows through). Camera input is gated on that central node's rect (below) rather
-    // than on WantCaptureMouse alone — the dockspace host window confused that signal.
-    if (useVulkan_) {
-        const ImGuiID dockId =
-                ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
-        if (const ImGuiDockNode* central = ImGui::DockBuilderGetCentralNode(dockId)) {
-            vkCentralX_ = central->Pos.x;
-            vkCentralY_ = central->Pos.y;
-            vkCentralW_ = central->Size.x;
-            vkCentralH_ = central->Size.y;
-        }
-    } else {
-        ImGui::DockSpaceOverViewport();
-    }
+    // Full-window dockspace so panels dock against the edges. The dockspace is opaque:
+    // under Vulkan it hides the fullscreen scene present, which is shown instead in the
+    // dockable "3D Viewport" panel (below) via the scene-color accessor; under GL the
+    // docked viewport renders directly.
+    ImGui::DockSpaceOverViewport();
 
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -380,6 +417,52 @@ void Application::renderUi() {
     if (!useVulkan_) {
         viewportPanel_->onImGui(*glRenderer_);
     }
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+    // Under Vulkan the renderer can't render to an offscreen target, but it exposes
+    // the per-frame scene-color image — draw it as a dockable "3D Viewport" panel via
+    // the threepp nativeSceneColorView() accessor.
+    if (useVulkan_ && vkScenePanel_ && vkRenderer_) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        const bool open = ImGui::Begin("3D Viewport");
+        ImGui::PopStyleVar();
+        bool hovered = false;
+        if (open) {
+            const uint32_t    slot  = vkRenderer_->currentSceneColorSlot();
+            const auto        view  = static_cast<VkImageView>(vkRenderer_->nativeSceneColorView(slot));
+            const ImTextureID tex   = vkScenePanel_->texture(slot, view);
+            const ImVec2      avail = ImGui::GetContentRegionAvail();
+            vkPanelW_ = avail.x; // drives the camera aspect in frameVulkan (next frame)
+            vkPanelH_ = avail.y;
+            if (tex && avail.x > 1.0f && avail.y > 1.0f) {
+                const ImVec2 origin = ImGui::GetCursorScreenPos();
+                ImGui::Image(tex, avail);
+                // Camera input: an InvisibleButton over the image (mirrors the GL
+                // ViewportPanel). orbit/pan run here in renderUi (one frame before the
+                // next render); zoom is the threepp wheel listener gated on hover.
+                ImGui::SetCursorScreenPos(origin);
+                ImGui::InvisibleButton("##vk_viewport_nav", avail,
+                                       ImGuiButtonFlags_MouseButtonLeft |
+                                               ImGuiButtonFlags_MouseButtonRight |
+                                               ImGuiButtonFlags_MouseButtonMiddle);
+                hovered = ImGui::IsItemHovered();
+                if (ImGui::IsItemActive()) {
+                    Viewport&    vp = viewports_->at(0);
+                    const ImVec2 d  = ImGui::GetIO().MouseDelta;
+                    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                        vp.orbit(-d.x * 0.01f, -d.y * 0.01f); // left drag: orbit
+                    } else if (ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
+                               ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+                        vp.pan(d.x, d.y); // right/middle drag: pan
+                    }
+                }
+            } else if (!tex) {
+                ImGui::TextDisabled("scene-color image not available");
+            }
+        }
+        vkPanelHovered_ = hovered;
+        ImGui::End();
+    }
+#endif
 
     // Plugin panels render into the dockspace via their own ImGui::Begin/End.
     plugins_->onImGui();
