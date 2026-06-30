@@ -21,6 +21,7 @@
 #include <imgui_impl_opengl3.h>
 
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+#  include <imgui_internal.h> // ImGuiDockNode + DockBuilderGetCentralNode (passthrough dockspace)
 #  include <threepp/cameras/PerspectiveCamera.hpp>
 #  include <threepp/extras/imgui/ImguiContext.hpp>
 #  include <threepp/input/MouseListener.hpp>
@@ -98,6 +99,11 @@ void Application::run(bool useVulkan) {
         renderer_   = std::move(vk);
         vkUi_       = std::make_unique<ImguiFunctionalContext>(
                 *canvas_, *vkRenderer_, [this] { renderUi(); });
+        // threepp's ImguiContext creates the ImGui context but does NOT enable
+        // docking (utsyn's GL initImGui() does). Without this, DockSpaceOverViewport
+        // is a no-op: panels can't dock and the central node has no rect (which the
+        // camera gate needs). The GL path is unaffected.
+        ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         Logger::instance().info("Application: Vulkan backend (deferred-hybrid, fullscreen overlay)");
     }
 #else
@@ -141,7 +147,8 @@ void Application::run(bool useVulkan) {
         // is over a panel so scrolling a list doesn't also zoom the scene.
         auto wheel = std::make_unique<WheelListener>();
         wheel->cb  = [this](float dy) {
-            if (!ImGui::GetIO().WantCaptureMouse) {
+            const ImGuiIO& io = ImGui::GetIO();
+            if (mouseInCentral(io.MousePos.x, io.MousePos.y) && !io.WantCaptureMouse) {
                 viewports_->at(0).dolly(dy);
             }
         };
@@ -284,7 +291,7 @@ void Application::frameVulkan() {
     // panel (WantCaptureMouse). The IO values are from the previous frame's
     // NewFrame (vkUi_->render() runs NewFrame below), i.e. one frame of lag.
     const ImGuiIO& io = ImGui::GetIO();
-    if (!io.WantCaptureMouse) {
+    if (mouseInCentral(io.MousePos.x, io.MousePos.y) && !io.WantCaptureMouse) {
         const ImVec2 d = io.MouseDelta;
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             vp.orbit(-d.x * 0.01f, -d.y * 0.01f); // left drag: orbit (~0.01 rad/px)
@@ -317,15 +324,31 @@ void Application::frameVulkan() {
         vkStyleApplied_ = true;
     }
 }
+
+bool Application::mouseInCentral(float x, float y) const {
+    // The central-node rect is updated in renderUi() (one frame ago, since renderUi
+    // runs inside vkUi_->render() after this); a frame of lag is fine.
+    return vkCentralW_ > 0.0f && vkCentralH_ > 0.0f && x >= vkCentralX_ &&
+           x < vkCentralX_ + vkCentralW_ && y >= vkCentralY_ && y < vkCentralY_ + vkCentralH_;
+}
 #endif
 
 void Application::renderUi() {
-    // Full-window dockspace (GL path) so panels dock against the edges. Under Vulkan
-    // the scene fills the window behind ImGui; a PassthruCentralNode dockspace still
-    // captured the mouse over the central area (breaking scene orbit/pan/zoom), so we
-    // skip the dockspace and let the panels float over the scene. Docking under Vulkan
-    // is a TODO (needs a dockspace that genuinely passes input through to the camera).
-    if (!useVulkan_) {
+    // Full-window dockspace so panels dock against the edges. Under Vulkan the scene
+    // fills the window behind ImGui, so use a PassthruCentralNode dockspace: panels
+    // dock to the edges while the central node stays transparent (the fullscreen scene
+    // shows through). Camera input is gated on that central node's rect (below) rather
+    // than on WantCaptureMouse alone — the dockspace host window confused that signal.
+    if (useVulkan_) {
+        const ImGuiID dockId =
+                ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
+        if (const ImGuiDockNode* central = ImGui::DockBuilderGetCentralNode(dockId)) {
+            vkCentralX_ = central->Pos.x;
+            vkCentralY_ = central->Pos.y;
+            vkCentralW_ = central->Size.x;
+            vkCentralH_ = central->Size.y;
+        }
+    } else {
         ImGui::DockSpaceOverViewport();
     }
 
