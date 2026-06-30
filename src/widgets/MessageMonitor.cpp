@@ -50,16 +50,21 @@ Disp computeDisplay(const TopicStats& s, double now) {
     return Disp::Live;
 }
 
+// Brackets hug the word — no padding INSIDE the brackets (which read as stray
+// spaces). Column alignment is handled by the caller, which prints the token in a
+// fixed-width field so the labels still line up. A quiet-but-healthy latched topic
+// reads [LATCH] (same healthy green as a live stream) so it's distinguished from a
+// streaming [LIVE] at a glance, not collapsed into it.
 const char* tokenFor(Disp d) {
     switch (d) {
-        case Disp::Off:     return "[-OFF-]";
-        case Disp::Error:   return "[ X   ]";
-        case Disp::Waiting: return "[WAIT ]";
-        case Disp::Live:    return "[LIVE ]";
+        case Disp::Off:     return "[OFF]";
+        case Disp::Error:   return "[ERROR]";
+        case Disp::Waiting: return "[WAIT]";
+        case Disp::Live:    return "[LIVE]";
         case Disp::Stale:   return "[STALE]";
-        case Disp::Latched: return "[ L   ]";
+        case Disp::Latched: return "[LATCH]";
     }
-    return "[?    ]";
+    return "[?]";
 }
 
 ImVec4 colorFor(Disp d) {
@@ -228,8 +233,11 @@ void MessageMonitor::drawRow(Row& row, RowId id) {
     // The whole status line is one colored, full-width clickable row with an ASCII
     // [+]/[-] marker (not ImGui's vector arrow). The "###" gives a stable id (the
     // row index) so the dynamic text never resets the open/closed state.
+    // %-7s on the token left-justifies it in a 7-wide field (the widest token,
+    // "[STALE]"/"[ERROR]", is 7) so the padding lands AFTER the "]" as column space,
+    // never inside the brackets — keeping every token tight while the labels align.
     char header[320];
-    std::snprintf(header, sizeof(header), "%s %s  %-22s  %s###mmrow%zu",
+    std::snprintf(header, sizeof(header), "%s %-7s  %-22s  %s###mmrow%zu",
                   ui::collapseMarker(row.open), tokenFor(disp), row.label.c_str(),
                   right, static_cast<std::size_t>(id));
 
