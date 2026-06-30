@@ -64,11 +64,12 @@ private:
     int width_ = 0;
     int height_ = 0;
 
-    // Orbit-camera state.
-    threepp::Vector3 cameraTarget_{0, 0, 1};
-    float radius_    = 12.0f;
+    // Orbit-camera state. Default framing is sized for a ~1 m robot at the origin
+    // (e.g. a UR arm), not the old 12 m wide-shot that rendered it tiny.
+    threepp::Vector3 cameraTarget_{0.0f, 0.0f, 0.4f};
+    float radius_    = 3.0f;
     float azimuth_   = -0.785f; // ~ -45° : view from +X / -Y
-    float elevation_ = 0.45f;   // radians above the XY plane
+    float elevation_ = 0.40f;   // radians above the XY plane
 };
 
 } // namespace utsyn

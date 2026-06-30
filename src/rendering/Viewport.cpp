@@ -3,8 +3,8 @@
 #include <threepp/cameras/PerspectiveCamera.hpp>
 #include <threepp/helpers/AxesHelper.hpp>
 #include <threepp/helpers/GridHelper.hpp>
-#include <threepp/lights/AmbientLight.hpp>
 #include <threepp/lights/DirectionalLight.hpp>
+#include <threepp/lights/HemisphereLight.hpp>
 #include <threepp/math/Color.hpp>
 #include <threepp/math/MathUtils.hpp>
 #include <threepp/renderers/GLRenderer.hpp>
@@ -30,15 +30,35 @@ Viewport::Viewport() {
     grid->rotateX(math::PI / 2.0f);
     scene_->add(grid);
 
-    // Axes: X red (forward), Y green (left), Z blue (up).
-    scene_->add(AxesHelper::create(2.0f));
+    // Axes: X red (forward), Y green (left), Z blue (up). Small — just an origin
+    // reference, not a feature.
+    scene_->add(AxesHelper::create(0.5f));
 
     // The scene is intentionally empty of content beyond the grid/axes reference —
     // plugins (e.g. robot_description) add their objects via SceneManager.
-    scene_->add(AmbientLight::create(Color(0xffffff), 0.4f));
-    auto sun = DirectionalLight::create(Color(0xffffff), 0.8f);
-    sun->position.set(5, -5, 10);
-    scene_->add(sun);
+    //
+    // Lighting rig tuned for a dark-grey robot on a near-black (terminal) background.
+    // A flat ambient+sun washed it out; instead use a small studio rig:
+    //   - hemisphere: soft sky->ground gradient so surfaces read with form, not flat;
+    //   - key: bright warm directional that shapes the robot;
+    //   - fill: cool, opposite side, lifts the shadow side without flattening;
+    //   - rim: cool back-light that edges the silhouette so a dark robot separates
+    //     from the dark background (the trick that makes it pop).
+    auto hemi = HemisphereLight::create(Color(0xa6c0d8), Color(0x202a30), 0.55f);
+    hemi->position.set(0, 0, 1);
+    scene_->add(hemi);
+
+    auto key = DirectionalLight::create(Color(0xfff3e3), 1.10f);
+    key->position.set(6, -4, 9);
+    scene_->add(key);
+
+    auto fill = DirectionalLight::create(Color(0x9fc0e6), 0.35f);
+    fill->position.set(-6, -3, 3);
+    scene_->add(fill);
+
+    auto rim = DirectionalLight::create(Color(0xbcd6ff), 0.55f);
+    rim->position.set(-3, 6, 5);
+    scene_->add(rim);
 
     updateCamera();
 }
