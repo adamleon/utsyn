@@ -8,6 +8,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Export compile commands for clang-tidy
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Vulkan backend — opt-in (default OFF so the GL build/ and build-ros/ trees are
+# unaffected). Configure the Vulkan tree with -DUTSYN_WITH_VULKAN=ON. Requires the
+# Vulkan SDK (VULKAN_SDK env var present) at configure time.
+option(UTSYN_WITH_VULKAN "Build utsyn's threepp Vulkan backend (requires Vulkan SDK)" OFF)
+
 # ============================================================
 # Compiler flags
 # ============================================================
@@ -86,10 +91,38 @@ FetchContent_Declare(
 # the same instance or its objects' type_info won't match the core renderer's.
 # threepp has no explicit lib type, so it honors BUILD_SHARED_LIBS. imgui_lib/
 # implot_lib are declared explicit STATIC below, so they stay static regardless.
+# --- Vulkan backend deps (opt-in) ---
+# threepp's VulkanRenderer #includes <vk_mem_alloc.h> (Vulkan Memory Allocator).
+# The LunarG SDK here does NOT bundle the optional VMA component and threepp does
+# not vendor it, so fetch the single header and pre-seed threepp's VMA search
+# (threepp does find_path(VMA_INCLUDE_DIR ...), satisfied here from the cache).
+# Must run before threepp is configured. THREEPP_WITH_VULKAN drives threepp's own
+# find_package(Vulkan) + SPIR-V shader compilation.
+if(UTSYN_WITH_VULKAN)
+    FetchContent_Declare(
+        vma
+        GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+        GIT_TAG        v3.1.0
+    )
+    FetchContent_GetProperties(vma)
+    if(NOT vma_POPULATED)
+        FetchContent_Populate(vma)   # download only — we just need the header
+    endif()
+    set(VMA_INCLUDE_DIR "${vma_SOURCE_DIR}/include" CACHE PATH "VMA include dir for threepp" FORCE)
+    set(THREEPP_WITH_VULKAN ON CACHE BOOL "" FORCE)
+endif()
+
 set(BUILD_SHARED_LIBS ON)
 FetchContent_MakeAvailable(threepp)
 set(BUILD_SHARED_LIBS OFF)
 FetchContent_MakeAvailable(imgui implot nanosvg nlohmann_json)
+
+if(UTSYN_WITH_VULKAN)
+    # threepp links Vulkan::Vulkan PUBLIC, but imgui_lib (built below) is a
+    # separate target that needs the Vulkan headers/lib for imgui_impl_vulkan.
+    find_package(Vulkan REQUIRED)
+    message(STATUS "utsyn: Vulkan backend ON (Vulkan ${Vulkan_VERSION})")
+endif()
 
 # ============================================================
 # ImGui library target
@@ -123,6 +156,13 @@ target_link_libraries(imgui_lib PUBLIC glfw)
 # that include imgui.h agree on the dllexport linkage.
 if(WIN32)
     target_compile_definitions(imgui_lib PUBLIC "IMGUI_API=__declspec(dllexport)")
+endif()
+
+if(UTSYN_WITH_VULKAN)
+    # Dual ImGui backend: keep imgui_impl_opengl3 (GL path) and add the Vulkan one.
+    # Use utsyn's own docking-branch backend, not threepp's example copy.
+    target_sources(imgui_lib PRIVATE ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+    target_link_libraries(imgui_lib PUBLIC Vulkan::Vulkan)
 endif()
 
 # ============================================================
@@ -214,6 +254,12 @@ endif()
 # lives in kernel32, linked by default).
 target_link_libraries(utsyn_core PUBLIC ${CMAKE_DL_LIBS})
 target_link_libraries(utsyn_core PRIVATE utsyn_warnings)
+
+# Vulkan backend define (PUBLIC so the app + plugins can #if UTSYN_WITH_VULKAN).
+# threepp's Vulkan::Vulkan link requirement propagates transitively from threepp.
+if(UTSYN_WITH_VULKAN)
+    target_compile_definitions(utsyn_core PUBLIC UTSYN_WITH_VULKAN=1)
+endif()
 
 if(ROS2_AVAILABLE)
     # Modern ROS2 (Jazzy) target-based linking. ament_target_dependencies() links
