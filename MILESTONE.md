@@ -212,9 +212,12 @@ threepp's **Vulkan deferred-hybrid** renderer is wired as an opt-in backend on t
    And consider splitting the large `feat/vulkan-backend` before opening its PR.
 7. **Interaction layer** (selection / transform gizmos / picking) — separate layer on top
    of Actors, deferred until after the robot is solid.
-8. **Vulkan multi-viewport / per-panel offscreen** — needs a real threepp
-   `VulkanRenderer::setRenderTarget` (Option B). The current accessor path mirrors a single
-   fullscreen render.
+8. **Vulkan multi-viewport / per-panel offscreen (Option B)** — needs a real threepp
+   `VulkanRenderer::setRenderTarget`. **See `OPTION-B-HANDOVER.md`** for the full grounded plan:
+   the Renderer contract, the `WgpuRenderer` offscreen template, VulkanRenderer's swapchain
+   coupling + honest scope (HIGH — ~23-25 render-extent-sized resources), utsyn integration
+   points, and a recommended **B-lite-first** phasing. The current accessor path only mirrors a
+   single fullscreen render.
 9. **Generic topic-field plotting** — the Topic Plot is currently hard-wired to
    `/joint_states` positions; a topic/field picker (message introspection) would generalize it.
 
