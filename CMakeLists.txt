@@ -207,7 +207,9 @@ add_library(utsyn_core SHARED
     src/rendering/SceneManager.cpp
     src/widgets/ViewportPanel.cpp
     src/widgets/MessageMonitor.cpp
+    src/widgets/TfTree.cpp
     src/ros/RosCore.cpp
+    src/ros/TfListener.cpp
     src/ros/SubscriptionRegistry.cpp
     src/ros/PackageResolver.cpp
     src/plugins/PluginLoader.cpp

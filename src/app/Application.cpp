@@ -9,6 +9,8 @@
 #include "ros/RosCore.hpp"
 #include "ros/SubscriptionBroker.hpp"
 #include "ros/SubscriptionRegistry.hpp"
+#include "ros/TfListener.hpp"
+#include "widgets/TfTree.hpp"
 #include "widgets/ViewportPanel.hpp"
 
 #include <threepp/canvas/Canvas.hpp>
@@ -227,6 +229,15 @@ void Application::run(bool useVulkan) {
     // during initialize() (below).
     statusPanel_   = panels_.add("utsyn", "Core");
     viewportEntry_ = panels_.add("3D Viewport", "Core");
+    tfPanel_       = panels_.add("TF Tree", "Core");
+
+    // TF frame graph + its tree panel. Offline (no ROS) it shows a demo tree so the panel
+    // is usable; /tf + /tf_static will populate it live once wired.
+    tfListener_ = std::make_unique<TfListener>();
+    tfTree_     = std::make_unique<TfTree>();
+    if (!rosCore_->rosEnabled()) {
+        tfListener_->loadDemoTree();
+    }
 
     // One PluginContext shared by all plugins. Its references must outlive every
     // plugin, so it is built after the collaborators and torn down before them.
@@ -509,6 +520,11 @@ void Application::renderUi() {
         ImGui::End();
     }
 #endif
+
+    // TF frame tree (core panel).
+    if (tfPanel_->open && tfTree_ && tfListener_) {
+        tfTree_->onImGui(*tfListener_, &tfPanel_->open);
+    }
 
     // Plugin panels render into the dockspace via their own ImGui::Begin/End.
     plugins_->onImGui();

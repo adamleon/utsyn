@@ -110,8 +110,8 @@ sliders mirror the robot's live `getJointValue()` so they track incoming `/joint
 (dragging one re-takes manual control). The interaction layer (selection / transform
 gizmos / picking) is deliberately deferred to a later layer.
 
-The still-stubbed modules (`LayoutManager`, `TfListener`, `TopicPlot`, `TfTree`)
-have header + .cpp that compile but whose methods are TODO.
+The still-stubbed module `TopicPlot` has a header + .cpp but its methods are TODO
+(and it is not yet in the build).
 
 Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 
@@ -135,12 +135,12 @@ Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 | ISubscriptionRegistry | src/ros/ISubscriptionRegistry | BUILT | Non-template, ABI-stable core contract for subscriptions. rclcpp-free |
 | SubscriptionBroker | src/ros/SubscriptionBroker | BUILT | Header-only typed facade (subscribe<Msg>/monitor<Msg>) over the registry. This is what PluginContext exposes |
 | SubscriptionRegistry | src/ros/SubscriptionRegistry | BUILT | Concrete registry: dedup + refcount + per-topic StatsCell + drainers + pump()/clear(). rclcpp only in the .cpp |
-| TfListener | src/ros/TfListener | STUB | Consumes tf2, exposes transforms to SceneManager |
+| TfListener | src/ros/TfListener | BUILT | Maintains the TF frame graph (child->parent + transform, static flag); thread-safe setTransform (ROS thread) + snapshot() with derived roots/children (render thread). Demo tree offline; /tf + /tf_static subscription pending |
 | PackageResolver | src/ros/PackageResolver | BUILT | Resolves `package://pkg/rel` URIs to absolute paths via search roots (UTSYN_PACKAGE_PATH / AMENT_PREFIX_PATH / ROS_PACKAGE_PATH); rewrites a URDF's mesh URIs pre-parse. rclcpp-free |
 | IPlugin | src/plugins/IPlugin | BUILT | Plugin contract (interface) + UTSYN_PLUGIN_ABI_VERSION sentinel |
 | PluginLoader | src/plugins/PluginLoader | BUILT | Loads plugin_*.dll/.so, resolves entry points, ABI-checks, drives lifecycle, ordered unload |
 | TopicPlot | src/widgets/TopicPlot | STUB | ImPlot-based real-time topic monitor panel |
-| TfTree | src/widgets/TfTree | STUB | TF frame tree panel |
+| TfTree | src/widgets/TfTree | BUILT | ASCII/terminal TF frame-tree panel ([+]/[-] markers, monospace-aligned x/y/z, dash-rule header, green=dynamic/grey=static) rendering a TfListener snapshot; core panel in the View menu |
 | ViewportPanel | src/widgets/ViewportPanel | BUILT | ImGui panel embedding a Viewport's render texture |
 | MessageMonitor | src/widgets/MessageMonitor | BUILT | Reusable per-topic streaming-feedback widget plugins embed (one collapsible block per topic; addRow + bind<Msg>) |
 | Theme | src/app/Theme | BUILT | Named status colors (StatusLive/Stale/Error/Idle) for the terminal palette |
