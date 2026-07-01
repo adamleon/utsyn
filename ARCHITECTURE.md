@@ -356,6 +356,7 @@ ImGui docking `.ini` state may be stored separately or unified — open decision
 | utsyn_core linkage | SHARED with `WINDOWS_EXPORT_ALL_SYMBOLS` | App + plugins share one core instance (one Logger singleton); auto-export generates the import lib so they can link on Windows |
 | Dependency headers | Included as SYSTEM (threepp via FetchContent `SYSTEM`; imgui/implot/nanosvg via `target_include_directories SYSTEM`) | Demotes third-party header warnings so our `/WX` only fails on our own code |
 | ImGui integration | Init directly (GLFW+OpenGL3 backends), not threepp's `ImguiContext` helper | The helper resets `ImGuiStyle` on first frame, which would wipe our terminal palette |
+| Font | JetBrains Mono vendored under `assets/fonts/`, loaded at base 16px + ImGui `FontScaleDpi` for crisp per-DPI rasterization; source assets dir baked in as `UTSYN_ASSET_DIR` | The default ImGui bitmap font blurs when scaled by `FontGlobalScale` and lacks non-ASCII glyphs; `FontScaleDpi` (dynamic fonts) re-rasterizes sharply, and a baked asset path frees the running exe from CWD/copy-step fragility. `loadFonts()` is shared by the GL and Vulkan ImGui contexts |
 | Subscription broker | Two layers: header-only typed `SubscriptionBroker` facade (`subscribe<Msg>`) + non-template ABI-stable `ISubscriptionRegistry` impl in core | The `Msg` template instantiates in the *plugin* TU, so no message-type template ever crosses the DLL boundary; core exports only non-template symbols |
 | ROS→render hand-off | Per-topic `StatsCell` (published-index double-buffer) for stats + `SpscRing` for payloads; drained on the render thread in `broker.pump()` | Lock-free, single-writer (ROS thread) / single-reader (render thread); honors "never block the render loop, never rclcpp on it" |
 | Single ImGui instance | ImGui/ImPlot linked PRIVATE into `utsyn_core` and exported via `IMGUI_API=__declspec(dllexport)`; plugins resolve from core, never link their own copy | A second ImGui copy has its own NULL `GImGui` → crash on first `ImGui::Begin()` in a plugin |
@@ -370,12 +371,6 @@ ImGui docking `.ini` state may be stored separately or unified — open decision
 
 ## What Does Not Exist Yet
 
-- **A validated live ROS2 receive path** — the project has only been built/run
-  with ROS2 OFF. The rclcpp receive/stat/teardown code compiles but is unexercised;
-  the MessageMonitor's live/stale/latched/rate feedback has only been seen in the
-  ROS-disabled (`[-OFF-]`) state.
-- **JetBrains Mono font** — the default ImGui font lacks non-ASCII glyphs (an
-  em-dash renders as a box), so UI strings stay ASCII until the font is loaded.
 - Graph-poll detection of advertised/QoS-incompatible/type-mismatch states (the
   `StreamState` enum has the cases; only `Live`/`NotAdvertised`/`RosDisabled` are
   currently produced). Serialized-size sampling for `lastMsgBytes`.
