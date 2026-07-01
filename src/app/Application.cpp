@@ -11,7 +11,12 @@
 #include "ros/SubscriptionRegistry.hpp"
 #include "ros/TfListener.hpp"
 #include "widgets/TfTree.hpp"
+#include "widgets/TopicPlot.hpp"
 #include "widgets/ViewportPanel.hpp"
+
+#if defined(UTSYN_ROS2) && UTSYN_ROS2
+#  include <sensor_msgs/msg/joint_state.hpp>
+#endif
 
 #include <threepp/canvas/Canvas.hpp>
 #include <threepp/canvas/Monitor.hpp>
@@ -21,6 +26,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <implot.h>
 
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
 #  include <imgui_impl_vulkan.h> // ImGui_ImplVulkan_AddTexture/RemoveTexture (scene-color -> ImGui::Image)
@@ -31,6 +37,7 @@
 #  include <threepp/scenes/Scene.hpp> // complete type: Scene -> Object3D upcast for render()
 #endif
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -112,6 +119,10 @@ Application::Application() = default;
 Application::~Application() {
     shutdown(); // backstop; normally already done at the end of run()
     layout_.saveNow(); // flush the layout while the ImGui context is still alive
+    if (implotInitialized_) {
+        ImPlot::DestroyContext(); // before the ImGui context (both GL and Vulkan paths)
+        implotInitialized_ = false;
+    }
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
     // Scene-panel descriptors/sampler first — they need the ImGui-Vulkan backend
     // (vkUi_) and the device (renderer_) still alive.
@@ -166,6 +177,8 @@ void Application::run(bool useVulkan) {
         // is a no-op: panels can't dock and the central node has no rect (which the
         // camera gate needs). The GL path is unaffected.
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        ImPlot::CreateContext(); // required before any ImPlot call (the Topic Plot)
+        implotInitialized_ = true;
         layout_.applyImGuiIniPath(); // stable ini path (before the first frame loads it)
         loadFonts(); // JetBrains Mono into the Vulkan ImGui atlas (ImguiContext sets FontScaleDpi)
         // Scene-color -> ImGui::Image descriptor cache (uses the renderer's native
@@ -230,6 +243,7 @@ void Application::run(bool useVulkan) {
     statusPanel_   = panels_.add("utsyn", "Core");
     viewportEntry_ = panels_.add("3D Viewport", "Core");
     tfPanel_       = panels_.add("TF Tree", "Core");
+    plotPanel_     = panels_.add("Topic Plot", "Core");
 
     // TF frame graph + its tree panel. With ROS it subscribes to /tf + /tf_static;
     // offline it shows a demo tree so the panel is still usable.
@@ -245,6 +259,21 @@ void Application::run(bool useVulkan) {
     if (!tfLive) {
         tfListener_->loadDemoTree();
     }
+
+    // Real-time plot. With ROS it plots each /joint_states position over time; offline a
+    // synthetic signal (pushed each frame in renderUi) keeps the panel usable.
+    topicPlot_ = std::make_unique<TopicPlot>();
+#if defined(UTSYN_ROS2) && UTSYN_ROS2
+    if (rosCore_->rosEnabled()) {
+        broker_->subscribe<sensor_msgs::msg::JointState>(
+                "/joint_states", [this](const sensor_msgs::msg::JointState& m) {
+                    for (std::size_t i = 0; i < m.name.size() && i < m.position.size(); ++i) {
+                        topicPlot_->push(m.name[i], static_cast<float>(m.position[i]));
+                    }
+                });
+        plotLive_ = true;
+    }
+#endif
 
     // One PluginContext shared by all plugins. Its references must outlive every
     // plugin, so it is built after the collaborators and torn down before them.
@@ -273,6 +302,8 @@ void Application::initImGui() {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImPlot::CreateContext(); // required before any ImPlot call (the Topic Plot)
+    implotInitialized_ = true;
 
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -531,6 +562,19 @@ void Application::renderUi() {
     // TF frame tree (core panel).
     if (tfPanel_->open && tfTree_ && tfListener_) {
         tfTree_->onImGui(*tfListener_, &tfPanel_->open);
+    }
+
+    // Real-time topic plot (core panel). Offline, feed it a synthetic signal each frame so
+    // the panel is usable without a ROS graph.
+    if (topicPlot_) {
+        if (!plotLive_) {
+            const float t = static_cast<float>(ImGui::GetTime());
+            topicPlot_->push("sin(t)", std::sin(t));
+            topicPlot_->push("sin(2t)/2", 0.5f * std::sin(2.0f * t));
+        }
+        if (plotPanel_->open) {
+            topicPlot_->onImGui(&plotPanel_->open);
+        }
     }
 
     // Plugin panels render into the dockspace via their own ImGui::Begin/End.

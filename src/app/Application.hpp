@@ -26,6 +26,7 @@ class ViewportManager;
 class ViewportPanel;
 class TfListener;
 class TfTree;
+class TopicPlot;
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
 struct VkScenePanel; // Vulkan scene-color -> ImGui descriptor cache (defined in Application.cpp)
 #endif
@@ -83,6 +84,8 @@ private:
     Panel*        statusPanel_   = nullptr; // core "utsyn" status panel
     Panel*        viewportEntry_ = nullptr; // core "3D Viewport" panel
     Panel*        tfPanel_       = nullptr; // core "TF Tree" panel
+    Panel*        plotPanel_     = nullptr; // core "Topic Plot" panel
+    bool          plotLive_      = false;   // true: /joint_states feeds the plot (else demo)
 
     // ROS / plugin backbone. Declaration order matters for destruction: plugins
     // and the broker tear down before the registry, which tears down before
@@ -98,8 +101,10 @@ private:
     std::unique_ptr<ViewportPanel>        viewportPanel_;
     std::unique_ptr<TfListener>           tfListener_; // TF frame graph (demo offline; /tf later)
     std::unique_ptr<TfTree>               tfTree_;     // TF Tree panel widget
+    std::unique_ptr<TopicPlot>            topicPlot_;  // real-time /joint_states plot widget
 
     bool  imguiInitialized_ = false;
+    bool  implotInitialized_ = false;
     bool  shutdownDone_ = false;
     float dpiScale_ = 1.0f;
 

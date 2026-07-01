@@ -209,6 +209,7 @@ add_library(utsyn_core SHARED
     src/widgets/ViewportPanel.cpp
     src/widgets/MessageMonitor.cpp
     src/widgets/TfTree.cpp
+    src/widgets/TopicPlot.cpp
     src/ros/RosCore.cpp
     src/ros/TfListener.cpp
     src/ros/SubscriptionRegistry.cpp

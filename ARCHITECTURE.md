@@ -110,8 +110,8 @@ sliders mirror the robot's live `getJointValue()` so they track incoming `/joint
 (dragging one re-takes manual control). The interaction layer (selection / transform
 gizmos / picking) is deliberately deferred to a later layer.
 
-The still-stubbed module `TopicPlot` has a header + .cpp but its methods are TODO
-(and it is not yet in the build).
+All former stub modules are now implemented and in the build; there are no compile-only
+stubs left in the core.
 
 Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 
@@ -139,7 +139,7 @@ Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 | PackageResolver | src/ros/PackageResolver | BUILT | Resolves `package://pkg/rel` URIs to absolute paths via search roots (UTSYN_PACKAGE_PATH / AMENT_PREFIX_PATH / ROS_PACKAGE_PATH); rewrites a URDF's mesh URIs pre-parse. rclcpp-free |
 | IPlugin | src/plugins/IPlugin | BUILT | Plugin contract (interface) + UTSYN_PLUGIN_ABI_VERSION sentinel |
 | PluginLoader | src/plugins/PluginLoader | BUILT | Loads plugin_*.dll/.so, resolves entry points, ABI-checks, drives lifecycle, ordered unload |
-| TopicPlot | src/widgets/TopicPlot | STUB | ImPlot-based real-time topic monitor panel |
+| TopicPlot | src/widgets/TopicPlot | BUILT | Real-time multi-channel line plot (ImPlot): per-channel ring buffers, x-axis scrolling to the last N seconds, auto-fit y. Plots /joint_states positions live (synthetic signal offline). Core panel in the View menu |
 | TfTree | src/widgets/TfTree | BUILT | ASCII/terminal TF frame-tree panel ([+]/[-] markers, dash-rule header, green=dynamic/grey=static) rendering a TfListener snapshot: monospace-aligned x/y/z (m) + roll/pitch/yaw (deg). A relative/absolute toggle composes each frame down the chain to the world frame. Core panel in the View menu |
 | ViewportPanel | src/widgets/ViewportPanel | BUILT | ImGui panel embedding a Viewport's render texture |
 | MessageMonitor | src/widgets/MessageMonitor | BUILT | Reusable per-topic streaming-feedback widget plugins embed (one collapsible block per topic; addRow + bind<Msg>) |
