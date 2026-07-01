@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include "LayoutManager.hpp" // direct member (owns the ImGui ini path string)
+
 namespace threepp {
 class Canvas;
 class Renderer;
@@ -87,6 +89,10 @@ private:
     bool  imguiInitialized_ = false;
     bool  shutdownDone_ = false;
     float dpiScale_ = 1.0f;
+
+    // Layout persistence (points ImGui's ini at a stable per-user path). Declared last
+    // so it outlives the ImGui context, which is torn down in ~Application's body.
+    LayoutManager layout_;
 };
 
 } // namespace utsyn

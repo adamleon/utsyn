@@ -109,6 +109,7 @@ Application::Application() = default;
 
 Application::~Application() {
     shutdown(); // backstop; normally already done at the end of run()
+    layout_.saveNow(); // flush the layout while the ImGui context is still alive
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
     // Scene-panel descriptors/sampler first — they need the ImGui-Vulkan backend
     // (vkUi_) and the device (renderer_) still alive.
@@ -163,6 +164,7 @@ void Application::run(bool useVulkan) {
         // is a no-op: panels can't dock and the central node has no rect (which the
         // camera gate needs). The GL path is unaffected.
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        layout_.applyImGuiIniPath(); // stable ini path (before the first frame loads it)
         loadFonts(); // JetBrains Mono into the Vulkan ImGui atlas (ImguiContext sets FontScaleDpi)
         // Scene-color -> ImGui::Image descriptor cache (uses the renderer's native
         // device + the ImGui-Vulkan backend that vkUi_ just initialised).
@@ -251,6 +253,8 @@ void Application::initImGui() {
 
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+
+    layout_.applyImGuiIniPath(); // stable ini path (before the first frame loads it)
 
     loadFonts(); // JetBrains Mono — the terminal aesthetic
     // Crisp DPI scaling via ImGui's dynamic-font rasterization (re-rasterizes the font

@@ -122,7 +122,7 @@ Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 | Module | Location | Status | Purpose |
 |---|---|---|---|
 | Application | src/app/Application | BUILT | Window, ImGui dockspace + terminal style, render loop (GL default; opt-in Vulkan deferred-hybrid via `--vulkan`, scene-color shown in a dockable panel); wires the ROS/plugin backbone, runs plugin lifecycle, ordered shutdown |
-| LayoutManager | src/app/LayoutManager | STUB | Panel layout persistence (JSON) |
+| LayoutManager | src/app/LayoutManager | BUILT | Points ImGui's ini file at a stable per-user config dir so the docking layout persists across runs (GL + Vulkan share it). utsyn's own higher-level layout.json is not built yet |
 | Logger | src/app/Logger | BUILT | Thread-safe singleton logger (info/warn/error + ring buffer, mirrors to stderr) |
 | Viewport | src/rendering/Viewport | BUILT | threepp scene + camera, rendered offscreen to a RenderTarget; exposes scene() for SceneManager (grid + axes only — demo meshes removed) |
 | ViewportManager | src/rendering/ViewportManager | BUILT | Owns and manages all Viewport instances |
@@ -331,10 +331,18 @@ Do not add threads without updating this document.
 
 ## Persistence
 
-Layout saved to `~/.config/utsyn/layout.json` (Linux) / `%APPDATA%\utsyn\layout.json` (Windows).
-Format: JSON via nlohmann/json.
-Contains: panel list, dock positions, open state, viewport configurations.
-ImGui docking `.ini` state may be stored separately or unified — open decision.
+**Implemented: ImGui layout state.** `LayoutManager` points ImGui's `io.IniFilename` at a
+stable per-user path — `%APPDATA%\utsyn\imgui.ini` (Windows) / `$XDG_CONFIG_HOME`|`~/.config`
+`/utsyn/imgui.ini` (Linux), created on startup — so the docking layout (dock nodes, window
+positions/sizes, open state) survives restarts instead of scattering to a CWD-relative
+`imgui.ini`. `applyImGuiIniPath()` runs once per ImGui context, after CreateContext and
+before the first frame; GL and Vulkan share the same file, so a layout carries across
+backends. `saveNow()` flushes on shutdown so a last-second change isn't lost (ImGui
+otherwise auto-saves at `IniSavingRate`).
+
+**Not yet: utsyn's own layout.json.** A higher-level layout (named layouts, plugin panel
+descriptors, viewport configs) via nlohmann/json to the same config dir is planned but
+unbuilt. Whether it unifies with or wraps the ImGui ini is an open decision (below).
 
 ---
 
@@ -357,6 +365,7 @@ ImGui docking `.ini` state may be stored separately or unified — open decision
 | Dependency headers | Included as SYSTEM (threepp via FetchContent `SYSTEM`; imgui/implot/nanosvg via `target_include_directories SYSTEM`) | Demotes third-party header warnings so our `/WX` only fails on our own code |
 | ImGui integration | Init directly (GLFW+OpenGL3 backends), not threepp's `ImguiContext` helper | The helper resets `ImGuiStyle` on first frame, which would wipe our terminal palette |
 | Font | JetBrains Mono vendored under `assets/fonts/`, loaded at base 16px + ImGui `FontScaleDpi` for crisp per-DPI rasterization; source assets dir baked in as `UTSYN_ASSET_DIR` | The default ImGui bitmap font blurs when scaled by `FontGlobalScale` and lacks non-ASCII glyphs; `FontScaleDpi` (dynamic fonts) re-rasterizes sharply, and a baked asset path frees the running exe from CWD/copy-step fragility. `loadFonts()` is shared by the GL and Vulkan ImGui contexts |
+| Layout persistence | Redirect ImGui's own ini file to a per-user config dir (`LayoutManager`) rather than hand-rolling a serializer (yet) | ImGui already serializes the full docking tree + window positions/sizes/open-state robustly; redirecting `io.IniFilename` gives cross-run (and cross-backend) persistence for free. utsyn's higher-level layout.json (named layouts) can layer on later — an open decision |
 | Subscription broker | Two layers: header-only typed `SubscriptionBroker` facade (`subscribe<Msg>`) + non-template ABI-stable `ISubscriptionRegistry` impl in core | The `Msg` template instantiates in the *plugin* TU, so no message-type template ever crosses the DLL boundary; core exports only non-template symbols |
 | ROS→render hand-off | Per-topic `StatsCell` (published-index double-buffer) for stats + `SpscRing` for payloads; drained on the render thread in `broker.pump()` | Lock-free, single-writer (ROS thread) / single-reader (render thread); honors "never block the render loop, never rclcpp on it" |
 | Single ImGui instance | ImGui/ImPlot linked PRIVATE into `utsyn_core` and exported via `IMGUI_API=__declspec(dllexport)`; plugins resolve from core, never link their own copy | A second ImGui copy has its own NULL `GImGui` → crash on first `ImGui::Begin()` in a plugin |
