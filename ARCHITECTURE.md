@@ -123,6 +123,7 @@ Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 |---|---|---|---|
 | Application | src/app/Application | BUILT | Window, ImGui dockspace + terminal style, render loop (GL default; opt-in Vulkan deferred-hybrid via `--vulkan`, scene-color shown in a dockable panel); wires the ROS/plugin backbone, runs plugin lifecycle, ordered shutdown |
 | LayoutManager | src/app/LayoutManager | BUILT | Points ImGui's ini file at a stable per-user config dir so the docking layout persists across runs (GL + Vulkan share it). utsyn's own higher-level layout.json is not built yet |
+| PanelRegistry | src/app/PanelRegistry | BUILT | Registry of dockable panels (name + group + open state) for core panels and plugin panels (via PluginContext), so the View menu can enumerate + toggle every panel uniformly |
 | Logger | src/app/Logger | BUILT | Thread-safe singleton logger (info/warn/error + ring buffer, mirrors to stderr) |
 | Viewport | src/rendering/Viewport | BUILT | threepp scene + camera, rendered offscreen to a RenderTarget; exposes scene() for SceneManager (grid + axes only — demo meshes removed) |
 | ViewportManager | src/rendering/ViewportManager | BUILT | Owns and manages all Viewport instances |
@@ -232,9 +233,19 @@ struct PluginContext {
     SceneManager&       scene;     // 3D scene objects
     ViewportManager&    viewports; // Viewport access
     Logger&             logger;    // Logging
+    PanelRegistry&      panels;    // Register UI panels for the View menu (ABI v2)
 };
 ```
-Do not add fields to PluginContext without updating this document and versioning the interface.
+Do not add fields to PluginContext without updating this document and versioning the
+interface. `panels` was added in **ABI v2** (`UTSYN_PLUGIN_ABI_VERSION 2`): a plugin
+registers each panel once in `initialize()` and gates its `ImGui::Begin` on the returned
+handle's `open` bool, so the app's View menu can enumerate and toggle every panel:
+```cpp
+panel_ = ctx.panels.add("Robot Description", name()); // in initialize()
+if (!panel_->open) return;                            // in onImGui()
+if (ImGui::Begin("Robot Description", &panel_->open)) { ... }
+ImGui::End();
+```
 
 ### Panel registration
 Plugins render their own ImGui panels inside `onImGui()`.
@@ -366,6 +377,7 @@ unbuilt. Whether it unifies with or wraps the ImGui ini is an open decision (bel
 | ImGui integration | Init directly (GLFW+OpenGL3 backends), not threepp's `ImguiContext` helper | The helper resets `ImGuiStyle` on first frame, which would wipe our terminal palette |
 | Font | JetBrains Mono vendored under `assets/fonts/`, loaded at base 16px + ImGui `FontScaleDpi` for crisp per-DPI rasterization; source assets dir baked in as `UTSYN_ASSET_DIR` | The default ImGui bitmap font blurs when scaled by `FontGlobalScale` and lacks non-ASCII glyphs; `FontScaleDpi` (dynamic fonts) re-rasterizes sharply, and a baked asset path frees the running exe from CWD/copy-step fragility. `loadFonts()` is shared by the GL and Vulkan ImGui contexts |
 | Layout persistence | Redirect ImGui's own ini file to a per-user config dir (`LayoutManager`) rather than hand-rolling a serializer (yet) | ImGui already serializes the full docking tree + window positions/sizes/open-state robustly; redirecting `io.IniFilename` gives cross-run (and cross-backend) persistence for free. utsyn's higher-level layout.json (named layouts) can layer on later — an open decision |
+| Panel visibility | `PanelRegistry` owns each panel's `open` bool (core panels registered by the app, plugin panels via `PluginContext`); a data-driven View menu enumerates + toggles them | The app can't reach a plugin's private open bool, so a View menu can't list plugin panels without a shared registry. Centralizing the bool also lets a panel's `X` button and the menu toggle stay in sync. Cost: a `PluginContext` field → ABI bump to v2 |
 | Subscription broker | Two layers: header-only typed `SubscriptionBroker` facade (`subscribe<Msg>`) + non-template ABI-stable `ISubscriptionRegistry` impl in core | The `Msg` template instantiates in the *plugin* TU, so no message-type template ever crosses the DLL boundary; core exports only non-template symbols |
 | ROS→render hand-off | Per-topic `StatsCell` (published-index double-buffer) for stats + `SpscRing` for payloads; drained on the render thread in `broker.pump()` | Lock-free, single-writer (ROS thread) / single-reader (render thread); honors "never block the render loop, never rclcpp on it" |
 | Single ImGui instance | ImGui/ImPlot linked PRIVATE into `utsyn_core` and exported via `IMGUI_API=__declspec(dllexport)`; plugins resolve from core, never link their own copy | A second ImGui copy has its own NULL `GImGui` → crash on first `ImGui::Begin()` in a plugin |

@@ -223,10 +223,15 @@ void Application::run(bool useVulkan) {
     }
 #endif
 
+    // Register the core panels first so they head the View menu; plugins append theirs
+    // during initialize() (below).
+    statusPanel_   = panels_.add("utsyn", "Core");
+    viewportEntry_ = panels_.add("3D Viewport", "Core");
+
     // One PluginContext shared by all plugins. Its references must outlive every
     // plugin, so it is built after the collaborators and torn down before them.
     ctx_ = std::make_unique<PluginContext>(
-            PluginContext{*broker_, *scene_, *viewports_, Logger::instance()});
+            PluginContext{*broker_, *scene_, *viewports_, Logger::instance(), panels_});
 
     plugins_ = std::make_unique<PluginLoader>();
     const std::size_t loaded =
@@ -421,34 +426,50 @@ void Application::renderUi() {
             }
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("View")) {
+            // Every registered panel (core + plugin-contributed), grouped, each with a
+            // checkable toggle bound to its open state.
+            std::string group;
+            for (const auto& p : panels_.panels()) {
+                if (p->group != group) {
+                    group = p->group;
+                    ImGui::SeparatorText(group.empty() ? "Panels" : group.c_str());
+                }
+                ImGui::MenuItem(p->name.c_str(), nullptr, &p->open);
+            }
+            ImGui::EndMenu();
+        }
         ImGui::EndMainMenuBar();
     }
 
-    if (ImGui::Begin("utsyn", nullptr, ImGuiWindowFlags_NoCollapse)) {
-        ImGui::TextUnformatted("utsyn - ROS2 visualizer / HMI");
-        ImGui::Separator();
-        ImGui::Text("%.1f FPS (%.2f ms/frame)",
-                    static_cast<double>(ImGui::GetIO().Framerate),
-                    1000.0 / static_cast<double>(ImGui::GetIO().Framerate));
-        ImGui::Text("DPI scale: %.2f", static_cast<double>(dpiScale_));
-        ImGui::Text("Renderer: %s", useVulkan_ ? "Vulkan (deferred-hybrid)" : "OpenGL");
-        ImGui::Text("ROS2: %s", rosCore_->rosEnabled() ? "enabled" : "disabled (UTSYN_ROS2 off)");
-        ImGui::TextDisabled("Plugins loaded: %llu",
-                            static_cast<unsigned long long>(plugins_->count()));
+    if (statusPanel_->open) {
+        if (ImGui::Begin("utsyn", &statusPanel_->open, ImGuiWindowFlags_NoCollapse)) {
+            ImGui::TextUnformatted("utsyn - ROS2 visualizer / HMI");
+            ImGui::Separator();
+            ImGui::Text("%.1f FPS (%.2f ms/frame)",
+                        static_cast<double>(ImGui::GetIO().Framerate),
+                        1000.0 / static_cast<double>(ImGui::GetIO().Framerate));
+            ImGui::Text("DPI scale: %.2f", static_cast<double>(dpiScale_));
+            ImGui::Text("Renderer: %s", useVulkan_ ? "Vulkan (deferred-hybrid)" : "OpenGL");
+            ImGui::Text("ROS2: %s",
+                        rosCore_->rosEnabled() ? "enabled" : "disabled (UTSYN_ROS2 off)");
+            ImGui::TextDisabled("Plugins loaded: %llu",
+                                static_cast<unsigned long long>(plugins_->count()));
+        }
+        ImGui::End();
     }
-    ImGui::End();
 
     // Docked offscreen viewport — GL only (under Vulkan the scene renders fullscreen).
-    if (!useVulkan_) {
-        viewportPanel_->onImGui(*glRenderer_);
+    if (!useVulkan_ && viewportEntry_->open) {
+        viewportPanel_->onImGui(*glRenderer_, &viewportEntry_->open);
     }
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
     // Under Vulkan the renderer can't render to an offscreen target, but it exposes
     // the per-frame scene-color image — draw it as a dockable "3D Viewport" panel via
     // the threepp nativeSceneColorView() accessor.
-    if (useVulkan_ && vkScenePanel_ && vkRenderer_) {
+    if (useVulkan_ && vkScenePanel_ && vkRenderer_ && viewportEntry_->open) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-        const bool open = ImGui::Begin("3D Viewport");
+        const bool open = ImGui::Begin("3D Viewport", &viewportEntry_->open);
         ImGui::PopStyleVar();
         bool hovered = false;
         if (open) {

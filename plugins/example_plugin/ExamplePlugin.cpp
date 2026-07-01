@@ -9,6 +9,7 @@
 // in the dedicated demo plugin (the MessageMonitor widget, next deliverable).
 
 #include "app/Logger.hpp"
+#include "app/PanelRegistry.hpp"
 #include "plugins/IPlugin.hpp"
 #include "widgets/TerminalUi.hpp"
 
@@ -21,7 +22,8 @@ namespace utsyn {
 class ExamplePlugin final : public IPlugin {
 public:
     void initialize(PluginContext& ctx) override {
-        ctx_ = &ctx;
+        ctx_   = &ctx;
+        panel_ = ctx.panels.add("Example Plugin", name()); // listed/toggled in the View menu
         ctx.logger.info("ExamplePlugin: initialized");
         // TODO: subscribe to a topic once the MessageMonitor widget lands:
         //   ctx.broker.subscribe<sensor_msgs::msg::JointState>(
@@ -29,10 +31,10 @@ public:
     }
 
     void onImGui() override {
-        if (!panelOpen_) {
+        if (!panel_->open) {
             return;
         }
-        if (ImGui::Begin("Example Plugin", &panelOpen_, ImGuiWindowFlags_NoCollapse)) {
+        if (ImGui::Begin("Example Plugin", &panel_->open, ImGuiWindowFlags_NoCollapse)) {
             ImGui::TextUnformatted("Reference plugin online.");
             ui::dashRule();
             ImGui::Text("Uptime: %.1f s", uptimeSeconds_);
@@ -60,9 +62,9 @@ public:
 
 private:
     PluginContext* ctx_ = nullptr;
+    Panel*         panel_ = nullptr; // owned by the app's PanelRegistry
     float          uptimeSeconds_ = 0.0f;
     unsigned long  frameCount_ = 0;
-    bool           panelOpen_ = true;
 };
 
 } // namespace utsyn

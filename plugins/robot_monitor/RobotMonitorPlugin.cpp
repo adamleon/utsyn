@@ -8,6 +8,7 @@
 // rate/age/latched feedback and the callbacks stash the latest payloads.
 
 #include "app/Logger.hpp"
+#include "app/PanelRegistry.hpp"
 #include "plugins/IPlugin.hpp"
 #include "widgets/MessageMonitor.hpp"
 #include "widgets/TerminalUi.hpp"
@@ -27,7 +28,8 @@ namespace utsyn {
 class RobotMonitorPlugin final : public IPlugin {
 public:
     void initialize(PluginContext& ctx) override {
-        ctx_ = &ctx;
+        ctx_   = &ctx;
+        panel_ = ctx.panels.add("Robot Monitor", name()); // View-menu entry
         monitor_.emplace(ctx.broker);
 
         // Predefined rows. addRow creates the display row regardless of ROS2; bind
@@ -50,10 +52,10 @@ public:
     }
 
     void onImGui() override {
-        if (!open_) {
+        if (!panel_->open) {
             return;
         }
-        if (ImGui::Begin("Robot Monitor", &open_, ImGuiWindowFlags_NoCollapse)) {
+        if (ImGui::Begin("Robot Monitor", &panel_->open, ImGuiWindowFlags_NoCollapse)) {
 #if !(defined(UTSYN_ROS2) && UTSYN_ROS2)
             ImGui::TextDisabled("Built without ROS2 - topics are inert (rows show OFF).");
             ui::dashRule();
@@ -96,13 +98,13 @@ private:
 #endif
 
     PluginContext*                ctx_ = nullptr;
+    Panel*                        panel_ = nullptr; // owned by the app's PanelRegistry
     std::optional<MessageMonitor> monitor_;
     MessageMonitor::RowId         jointsRow_ = 0;
     MessageMonitor::RowId         urdfRow_ = 0;
     int                           lastJointCount_ = 0;
     int                           urdfBytes_ = 0;
     bool                          urdfReceived_ = false;
-    bool                          open_ = true;
 };
 
 } // namespace utsyn

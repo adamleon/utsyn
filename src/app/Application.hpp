@@ -2,7 +2,8 @@
 
 #include <memory>
 
-#include "LayoutManager.hpp" // direct member (owns the ImGui ini path string)
+#include "LayoutManager.hpp"  // direct member (owns the ImGui ini path string)
+#include "PanelRegistry.hpp"  // direct member (owns panel open-state for the View menu)
 
 namespace threepp {
 class Canvas;
@@ -72,6 +73,13 @@ private:
     bool                                  vkPanelHovered_ = false;            // 3D Viewport panel hovered (wheel zoom)
 #endif
     bool                                  useVulkan_ = false;
+
+    // UI panel registry (core + plugin panels) driving the View menu. Declared before
+    // the backbone so it outlives ctx_ (which references it) and the plugins (which hold
+    // Panel* into it).
+    PanelRegistry panels_;
+    Panel*        statusPanel_   = nullptr; // core "utsyn" status panel
+    Panel*        viewportEntry_ = nullptr; // core "3D Viewport" panel
 
     // ROS / plugin backbone. Declaration order matters for destruction: plugins
     // and the broker tear down before the registry, which tears down before

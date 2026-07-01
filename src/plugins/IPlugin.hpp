@@ -12,7 +12,7 @@
 // every plugin MUST be built with the same compiler, C runtime (/MD[d]) and build
 // config (_ITERATOR_DEBUG_LEVEL) as utsyn_core. A Debug-plugin / Release-core mix
 // is unsupported and will corrupt at runtime even when the version matches.
-#define UTSYN_PLUGIN_ABI_VERSION 1
+#define UTSYN_PLUGIN_ABI_VERSION 2
 
 namespace utsyn {
 
@@ -20,12 +20,14 @@ class SceneManager;
 class SubscriptionBroker;
 class ViewportManager;
 class Logger;
+class PanelRegistry;
 
 struct PluginContext {
     SubscriptionBroker& broker;    // Request topic subscriptions through this — never use rclcpp directly
     SceneManager&       scene;     // Add/remove 3D scene objects
     ViewportManager&    viewports; // Create or reference viewports
     Logger&             logger;    // Log messages
+    PanelRegistry&      panels;    // Register UI panels here so the View menu can list/toggle them
     // Config store for plugin-specific persistent settings — TBD
 };
 

@@ -200,6 +200,7 @@ endif()
 add_library(utsyn_core SHARED
     src/app/Application.cpp
     src/app/LayoutManager.cpp
+    src/app/PanelRegistry.cpp
     src/app/Logger.cpp
     src/rendering/Viewport.cpp
     src/rendering/ViewportManager.cpp

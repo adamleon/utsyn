@@ -146,12 +146,14 @@ class SceneManager;
 class SubscriptionBroker;
 class ViewportManager;
 class Logger;
+class PanelRegistry;
 
 struct PluginContext {
     SubscriptionBroker& broker;    // Request topic subscriptions through this — never use rclcpp directly
     SceneManager&       scene;     // Add/remove 3D scene objects
     ViewportManager&    viewports; // Create or reference viewports
     Logger&             logger;    // Log messages
+    PanelRegistry&      panels;    // Register UI panels so the View menu can list/toggle them (ABI v2)
     // Config store for plugin-specific persistent settings — TBD
 };
 

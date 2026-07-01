@@ -11,10 +11,10 @@ namespace utsyn {
 ViewportPanel::ViewportPanel(std::string title, Viewport& viewport)
     : title_(std::move(title)), viewport_(viewport) {}
 
-void ViewportPanel::onImGui(threepp::GLRenderer& renderer) {
+void ViewportPanel::onImGui(threepp::GLRenderer& renderer, bool* pOpen) {
     // No window padding so the 3D image fills the panel edge to edge.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    const bool open = ImGui::Begin(title_.c_str());
+    const bool open = ImGui::Begin(title_.c_str(), pOpen);
     ImGui::PopStyleVar();
 
     if (open) {

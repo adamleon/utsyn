@@ -8,6 +8,7 @@
 #include "RobotActor.hpp"
 
 #include "app/Logger.hpp"
+#include "app/PanelRegistry.hpp"
 #include "plugins/IPlugin.hpp"
 #include "widgets/MessageMonitor.hpp"
 
@@ -26,7 +27,8 @@ namespace utsyn {
 class RobotDescriptionPlugin final : public IPlugin {
 public:
     void initialize(PluginContext& ctx) override {
-        ctx_ = &ctx;
+        ctx_   = &ctx;
+        panel_ = ctx.panels.add("Robot Description", name()); // View-menu entry
 
         actor_.emplace(ctx.scene);
         actor_->onAttach(); // loads the built-in sample arm (visible offline)
@@ -54,10 +56,10 @@ public:
     }
 
     void onImGui() override {
-        if (!open_) {
+        if (!panel_->open) {
             return;
         }
-        if (ImGui::Begin("Robot Description", &open_, ImGuiWindowFlags_NoCollapse)) {
+        if (ImGui::Begin("Robot Description", &panel_->open, ImGuiWindowFlags_NoCollapse)) {
 #if !(defined(UTSYN_ROS2) && UTSYN_ROS2)
             ImGui::TextDisabled("ROS2 off - showing the built-in sample; use the sliders.");
             ImGui::Separator();
@@ -103,11 +105,11 @@ private:
 #endif
 
     PluginContext*                ctx_ = nullptr;
+    Panel*                        panel_ = nullptr; // owned by the app's PanelRegistry
     std::optional<RobotActor>     actor_;
     std::optional<MessageMonitor> monitor_;
     MessageMonitor::RowId         urdfRow_ = 0;
     MessageMonitor::RowId         jointsRow_ = 0;
-    bool                          open_ = true;
 };
 
 } // namespace utsyn
