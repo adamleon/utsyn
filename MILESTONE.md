@@ -1,10 +1,30 @@
 # MILESTONE / RESUME — utsyn
 
 Working handoff so a fresh session can pick up. Read this + ARCHITECTURE.md first.
-Last updated: **GUI FEATURE SWEEP on top of the Vulkan backend** (branch
+
+Last updated: **VULKAN OPTION B — offscreen render targets + true multi-viewport (DONE,
+verified).** `VulkanRenderer::setRenderTarget` is implemented on the threepp fork: a bound
+`RenderTarget` blits the final composited color into an offscreen `VkImage` (exposed via
+`nativeRenderTargetImageView`) instead of presenting. utsyn now renders **N cameras of the
+shared scene into N RenderTargets, one dockable panel each** — verified with **two
+independently-orbitable Vulkan viewports, no flicker**. The crux ("render N times, present
+once") is solved by an **acquire-once single-present** frame model (one swapchain image
+reused across cameras, fence-serialized, presented once with the ImGui overlay). Threepp-side
+changes: `setRenderTarget`/`getRenderTarget`, `nativeRenderTargetImageView`,
+`renderTargetFlipY()→true`, a per-RT `Image2D` cache keyed by uuid, `endFrameOffscreen()` +
+acquire-once orchestration in `beginFrameForPT`/`endFrame`/`renderFrame`, and a one-line
+swapchain `TRANSFER_SRC` usage flag (`VulkanContext.cpp`). utsyn-side: `frameVulkan()`/
+`renderUi()` loop N viewports, `numVkViewports_`, per-viewport `RenderTarget`s + panels +
+input routing. **All uncommitted** (threepp clone `feat/vulkan-rendertarget` + utsyn
+`feat/vulkan-backend`) — commit + the threepp PR are the user's call. Build/run below is
+unchanged (`build-vk`, `--vulkan`). Known first-cut tradeoffs: per-camera fence serialization
+(no intra-frame pipelining) + blit-scaled (not native-per-panel) resolution — both follow-ups
+(B-full). A pre-existing threepp swapchain-semaphore-reuse validation warning is benign on
+NVIDIA (unrelated to Option B).
+
+Prior milestone (still holds): **GUI FEATURE SWEEP on top of the Vulkan backend** (branch
 `feat/vulkan-backend`, pushed). On top of the opt-in Vulkan deferred-hybrid backend
-(`--vulkan`; dockable 3D viewport via the threepp `nativeSceneColorView` accessor), five
-GUI features, all verified:
+(`--vulkan`), five GUI features, all verified:
 - **JetBrains Mono** font — DPI-crisp via `FontScaleDpi`, both backends (`assets/fonts/`,
   baked `UTSYN_ASSET_DIR`).
 - **Layout persistence** — `LayoutManager` points ImGui's ini at `%APPDATA%\utsyn\imgui.ini`.
@@ -212,12 +232,13 @@ threepp's **Vulkan deferred-hybrid** renderer is wired as an opt-in backend on t
    And consider splitting the large `feat/vulkan-backend` before opening its PR.
 7. **Interaction layer** (selection / transform gizmos / picking) — separate layer on top
    of Actors, deferred until after the robot is solid.
-8. **Vulkan multi-viewport / per-panel offscreen (Option B)** — needs a real threepp
-   `VulkanRenderer::setRenderTarget`. **See `OPTION-B-HANDOVER.md`** for the full grounded plan:
-   the Renderer contract, the `WgpuRenderer` offscreen template, VulkanRenderer's swapchain
-   coupling + honest scope (HIGH — ~23-25 render-extent-sized resources), utsyn integration
-   points, and a recommended **B-lite-first** phasing. The current accessor path only mirrors a
-   single fullscreen render.
+8. ~~**Vulkan multi-viewport / per-panel offscreen (Option B)**~~ — **DONE** (B-lite:
+   `setRenderTarget` blits the composited color into the RT's offscreen `VkImage`;
+   acquire-once single present; N cameras → N docked panels; two-viewport verified). See the
+   header above + ARCHITECTURE.md "Vulkan Backend" + `OPTION-B-HANDOVER.md` (the original
+   grounded plan). **Remaining (B-full follow-ups):** native per-panel render extent (vs
+   blit-scale) and fully-pipelined submits (drop the per-camera fence serialization); plus
+   scene-per-viewport and plugin-created viewports.
 9. **Generic topic-field plotting** — the Topic Plot is currently hard-wired to
    `/joint_states` positions; a topic/field picker (message introspection) would generalize it.
 

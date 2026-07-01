@@ -1,5 +1,15 @@
 # HANDOVER — Option B: Vulkan offscreen render targets → true multi-viewport
 
+> **STATUS: IMPLEMENTED (B-lite), verified with two Vulkan viewports.** This doc is the
+> original grounded plan; it's kept for context. What shipped: `setRenderTarget` blits the
+> composited swapchain color into the RenderTarget's offscreen `VkImage`
+> (`nativeRenderTargetImageView`), and an **acquire-once single-present** model renders N
+> cameras into N RTs and presents once (§5's "no-present-on-offscreen" crux — solved by
+> reusing one acquired image across cameras, fence-serialized, rather than the doc's
+> per-render acquire, which blinks bare fullscreen frames). See MILESTONE.md + ARCHITECTURE.md
+> "Vulkan Backend" for the as-built description. Remaining = B-full (native per-panel extent,
+> pipelined submits) + scene-per-viewport + plugin-created viewports.
+
 Self-contained brief so a fresh session can start cold. Read this + `MILESTONE.md` +
 `ARCHITECTURE.md` ("Vulkan Backend" section) first.
 
