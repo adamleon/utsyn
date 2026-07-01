@@ -231,11 +231,18 @@ void Application::run(bool useVulkan) {
     viewportEntry_ = panels_.add("3D Viewport", "Core");
     tfPanel_       = panels_.add("TF Tree", "Core");
 
-    // TF frame graph + its tree panel. Offline (no ROS) it shows a demo tree so the panel
-    // is usable; /tf + /tf_static will populate it live once wired.
+    // TF frame graph + its tree panel. With ROS it subscribes to /tf + /tf_static;
+    // offline it shows a demo tree so the panel is still usable.
     tfListener_ = std::make_unique<TfListener>();
     tfTree_     = std::make_unique<TfTree>();
-    if (!rosCore_->rosEnabled()) {
+    bool tfLive = false;
+#if defined(UTSYN_ROS2) && UTSYN_ROS2
+    if (rosCore_->rosEnabled()) {
+        tfListener_->subscribe(*broker_);
+        tfLive = true;
+    }
+#endif
+    if (!tfLive) {
         tfListener_->loadDemoTree();
     }
 

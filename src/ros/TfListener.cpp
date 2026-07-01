@@ -2,7 +2,37 @@
 
 #include <set>
 
+#if defined(UTSYN_ROS2) && UTSYN_ROS2
+#  include "ros/SubscriptionBroker.hpp"
+
+#  include <tf2_msgs/msg/tf_message.hpp>
+#endif
+
 namespace utsyn {
+
+#if defined(UTSYN_ROS2) && UTSYN_ROS2
+namespace {
+
+// Copy every TransformStamped in a TFMessage into the graph (runs on the render thread
+// via the broker pump). header.frame_id is the parent, child_frame_id the child.
+void ingestInto(TfListener& tf, const tf2_msgs::msg::TFMessage& m, bool isStatic) {
+    for (const auto& ts : m.transforms) {
+        TfTransform t;
+        t.tx = ts.transform.translation.x;
+        t.ty = ts.transform.translation.y;
+        t.tz = ts.transform.translation.z;
+        t.qx = ts.transform.rotation.x;
+        t.qy = ts.transform.rotation.y;
+        t.qz = ts.transform.rotation.z;
+        t.qw = ts.transform.rotation.w;
+        const double stamp = static_cast<double>(ts.header.stamp.sec) +
+                             static_cast<double>(ts.header.stamp.nanosec) * 1e-9;
+        tf.setTransform(ts.child_frame_id, ts.header.frame_id, t, isStatic, stamp);
+    }
+}
+
+} // namespace
+#endif
 
 void TfListener::setTransform(const std::string& child, const std::string& parent,
                               const TfTransform& t, bool isStatic, double stamp) {
@@ -24,6 +54,17 @@ void TfListener::loadDemoTree() {
     setTransform("camera_link", "base_link", TfTransform{0.1, 0.0, 0.2, 0.0, 0.0, 0.0, 1.0}, true,
                  0.0);
 }
+
+#if defined(UTSYN_ROS2) && UTSYN_ROS2
+void TfListener::subscribe(SubscriptionBroker& broker) {
+    broker.subscribe<tf2_msgs::msg::TFMessage>(
+            "/tf", [this](const tf2_msgs::msg::TFMessage& m) { ingestInto(*this, m, false); });
+    broker.subscribe<tf2_msgs::msg::TFMessage>(
+            "/tf_static",
+            [this](const tf2_msgs::msg::TFMessage& m) { ingestInto(*this, m, true); },
+            QoSProfile::latched());
+}
+#endif
 
 TfListener::Snapshot TfListener::snapshot() const {
     const std::lock_guard<std::mutex> lk(mutex_);

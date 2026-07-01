@@ -8,6 +8,8 @@
 
 namespace utsyn {
 
+class SubscriptionBroker;
+
 // A single parent -> child transform in the TF graph.
 struct TfTransform {
     double tx = 0.0, ty = 0.0, tz = 0.0;           // translation
@@ -41,6 +43,12 @@ public:
 
     // Populate a synthetic robot-like tree so the widget is usable offline (no ROS graph).
     void loadDemoTree();
+
+#if defined(UTSYN_ROS2) && UTSYN_ROS2
+    // Subscribe to /tf (dynamic) + /tf_static (latched) via the broker. Callbacks deliver
+    // on the render thread (broker pump) and feed setTransform.
+    void subscribe(SubscriptionBroker& broker);
+#endif
 
     [[nodiscard]] Snapshot    snapshot() const; // thread-safe copy + derived roots/children
     [[nodiscard]] std::size_t frameCount() const;

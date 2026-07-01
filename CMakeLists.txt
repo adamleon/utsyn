@@ -187,6 +187,7 @@ if(ament_cmake_FOUND)
     find_package(geometry_msgs REQUIRED)
     find_package(tf2 REQUIRED)
     find_package(tf2_ros REQUIRED)
+    find_package(tf2_msgs REQUIRED)
     set(ROS2_AVAILABLE TRUE)
     message(STATUS "ROS2 found — building with ROS2 support")
 else()
@@ -288,6 +289,7 @@ if(ROS2_AVAILABLE)
         ${std_msgs_TARGETS}
         ${sensor_msgs_TARGETS}
         ${geometry_msgs_TARGETS}
+        ${tf2_msgs_TARGETS}
     )
     target_compile_definitions(utsyn_core PUBLIC UTSYN_ROS2=1)
 endif()

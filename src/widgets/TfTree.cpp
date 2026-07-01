@@ -6,6 +6,7 @@
 
 #include <imgui.h>
 
+#include <cmath>
 #include <cstdio>
 #include <set>
 #include <string>
@@ -14,7 +15,24 @@ namespace utsyn {
 
 namespace {
 
-constexpr int kNameCol = 30; // width (chars) of the indent+marker+name column
+constexpr int    kNameCol = 26;                        // width (chars) of the name column
+constexpr double kRadToDeg = 57.29577951308232;        // 180/pi
+
+// Quaternion (x,y,z,w) -> intrinsic roll/pitch/yaw (X-Y-Z) in degrees, for a readable,
+// live-updating rotation display (the part that actually changes as a revolute joint moves).
+void quatToRpyDeg(const TfTransform& t, double& roll, double& pitch, double& yaw) {
+    const double sinrCosp = 2.0 * (t.qw * t.qx + t.qy * t.qz);
+    const double cosrCosp = 1.0 - 2.0 * (t.qx * t.qx + t.qy * t.qy);
+    roll                  = std::atan2(sinrCosp, cosrCosp) * kRadToDeg;
+
+    const double sinp = 2.0 * (t.qw * t.qy - t.qz * t.qx);
+    pitch = (std::abs(sinp) >= 1.0 ? std::copysign(1.5707963267948966, sinp) : std::asin(sinp)) *
+            kRadToDeg;
+
+    const double sinyCosp = 2.0 * (t.qw * t.qz + t.qx * t.qy);
+    const double cosyCosp = 1.0 - 2.0 * (t.qy * t.qy + t.qz * t.qz);
+    yaw                   = std::atan2(sinyCosp, cosyCosp) * kRadToDeg;
+}
 
 // Recursively render `name` and its children as ASCII/terminal rows: an indented
 // [+]/[-] marker + name in a fixed-width column, then monospace-aligned x/y/z. Green =
@@ -35,11 +53,13 @@ void drawFrameRow(const TfListener::Snapshot& snap, const std::string& name, int
 
     // One full-width row string. "###name" is a stable id so the text can change each
     // frame (live transforms) without the row losing its click/hover identity.
-    char row[224];
+    char row[256];
     if (hasTf) {
         const TfTransform& t = frameIt->second.transform;
-        std::snprintf(row, sizeof(row), "%-*s %7.2f %7.2f %7.2f###%s", kNameCol, left, t.tx, t.ty,
-                      t.tz, name.c_str());
+        double             roll = 0.0, pitch = 0.0, yaw = 0.0;
+        quatToRpyDeg(t, roll, pitch, yaw);
+        std::snprintf(row, sizeof(row), "%-*s %6.2f %6.2f %6.2f %6.1f %6.1f %6.1f###%s", kNameCol,
+                      left, t.tx, t.ty, t.tz, roll, pitch, yaw, name.c_str());
     } else {
         std::snprintf(row, sizeof(row), "%-*s###%s", kNameCol, left, name.c_str());
     }
@@ -91,10 +111,11 @@ void TfTree::onImGui(const TfListener& tf, bool* pOpen) {
         return;
     }
 
-    ImGui::TextDisabled("%llu transform(s)  [-]/[+] to collapse",
+    ImGui::TextDisabled("%llu transform(s)   xyz = m, rpy = deg   ([-]/[+] collapse)",
                         static_cast<unsigned long long>(snap.frames.size()));
-    char header[128];
-    std::snprintf(header, sizeof(header), "%-*s %7s %7s %7s", kNameCol, "frame", "x", "y", "z");
+    char header[160];
+    std::snprintf(header, sizeof(header), "%-*s %6s %6s %6s %6s %6s %6s", kNameCol, "frame", "x",
+                  "y", "z", "roll", "pitch", "yaw");
     ImGui::TextDisabled("%s", header);
     ui::dashRule();
 
