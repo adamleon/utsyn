@@ -1,14 +1,24 @@
 # MILESTONE / RESUME — utsyn
 
 Working handoff so a fresh session can pick up. Read this + ARCHITECTURE.md first.
-Last updated: **OPT-IN VULKAN BACKEND — dockable 3D viewport working.** utsyn now runs
-threepp's Vulkan deferred-hybrid renderer (`utsyn.exe --vulkan`, built when
-`UTSYN_WITH_VULKAN=ON`). The scene renders fullscreen (no offscreen target), so the 3D
-view is a dockable ImGui panel that samples the renderer's scene-color image through a new
-threepp accessor (`nativeSceneColorView`, on a local threepp fork). Camera nav, docking,
-and correct aspect all verified on the RTX 3090; GL path unchanged. Committed on branch
-`feat/vulkan-backend`. Prior milestone holds: live UR5e over DDS → robot rendered +
-articulated (GL), with `PackageResolver` resolving `package://` meshes.
+Last updated: **GUI FEATURE SWEEP on top of the Vulkan backend** (branch
+`feat/vulkan-backend`, pushed). On top of the opt-in Vulkan deferred-hybrid backend
+(`--vulkan`; dockable 3D viewport via the threepp `nativeSceneColorView` accessor), five
+GUI features, all verified:
+- **JetBrains Mono** font — DPI-crisp via `FontScaleDpi`, both backends (`assets/fonts/`,
+  baked `UTSYN_ASSET_DIR`).
+- **Layout persistence** — `LayoutManager` points ImGui's ini at `%APPDATA%\utsyn\imgui.ini`.
+- **View menu + `PanelRegistry`** — lists/toggles every panel incl. plugin ones; added a
+  `PluginContext` field → **plugin ABI bumped to 2** (all plugins rebuilt).
+- **TF Tree** — `TfListener` + `TfTree`: live `/tf` + `/tf_static`, terminal ASCII style
+  ([+]/[-], green=dynamic/grey=static), x/y/z + roll/pitch/yaw, relative/absolute (world)
+  toggle. Needs `tf2_msgs` (added to CMake).
+- **Topic Plot** — `TopicPlot` (ImPlot): real-time `/joint_states` positions live, synthetic
+  signal offline. ImPlot needs its own `CreateContext`/`DestroyContext` (added).
+
+Validated against a live UR5e over DDS (RoboStack view demo). GL path stays the default.
+threepp fork `feat/vulkan-rendertarget` (the accessor) is a pending PR. Prior milestone
+holds: live UR5e → robot rendered + articulated (GL), `PackageResolver` resolving meshes.
 
 ## NEW since last session (uncommitted)
 - **`src/ros/PackageResolver.{hpp,cpp}`** (utsyn_core) — rewrites `package://pkg/...` mesh
@@ -50,10 +60,12 @@ articulated (GL), with `PackageResolver` resolving `package://` meshes.
 - **`feat/robot-description`** (renamed from `spike/threepp-shared`) — the live-URDF-robot
   work: shared threepp + SceneManager + Actor + robot_description + PackageResolver +
   ROS-enable + look-good pass. 8 commits on `3c75828`. **NOT pushed.**
-- **`feat/vulkan-backend`** — the opt-in Vulkan backend (this session), on top of
-  `feat/robot-description`. 5 commits: build-enable (`UTSYN_WITH_VULKAN` + VMA) /
-  dual-backend render path / panel docking / **dockable 3D viewport via the scene-color
-  accessor** / docs. **NOT pushed.**
+- **`feat/vulkan-backend`** — on top of `feat/robot-description`, **PUSHED**. The opt-in
+  Vulkan backend (build-enable + VMA / dual-backend render / panel docking / dockable 3D
+  viewport via the scene-color accessor) **plus five GUI features** (JetBrains Mono font /
+  layout persistence / View menu + PanelRegistry [plugin ABI v2] / TF Tree with live /tf +
+  rel/abs toggle / real-time Topic Plot). ~13 commits on `feat/robot-description`. The
+  branch is large — worth splitting when you PR it.
 - **`D:\development\threepp`** — a standalone threepp clone, branch
   `feat/vulkan-rendertarget` (commit `5e1b4414`): the ~33-line `nativeSceneColorView`
   accessor. This is the pending **threepp PR**. `gh` is not installed → fork/push/PR is the
@@ -191,18 +203,20 @@ threepp's **Vulkan deferred-hybrid** renderer is wired as an opt-in backend on t
 1–4. ~~Robot visual verify + live ROS data + commit + visual/collision look-good pass~~ —
    all DONE (see git log on `feat/robot-description`; UR5e renders + articulates from live
    data, studio lighting, monitor token fix).
-5. ~~Vulkan swap~~ — DONE this session (`feat/vulkan-backend`): opt-in deferred-hybrid
-   backend + dockable 3D viewport via the scene-color accessor. Verified on the RTX 3090.
-6. **Push** — nothing is pushed yet; all the user's call:
-   - `feat/robot-description` (robot work, 8 commits on `3c75828`)
-   - `feat/vulkan-backend` (Vulkan, 5 commits on `feat/robot-description`)
-   - the **threepp PR** from `D:\development\threepp` `feat/vulkan-rendertarget` (`5e1b4414`)
-     — `gh` not installed, so fork/push/open by hand.
+5. ~~Vulkan swap + GUI feature sweep~~ — DONE this session on `feat/vulkan-backend`
+   (**pushed**): Vulkan backend + font / layout persistence / View menu+PanelRegistry /
+   TF Tree (live /tf) / Topic Plot. See the header.
+6. ~~Push feat/robot-description + feat/vulkan-backend~~ — DONE (both on `origin`).
+   **Still the user's call:** the **threepp PR** from `D:\development\threepp`
+   `feat/vulkan-rendertarget` (`5e1b4414`) — `gh` not installed, so fork/push/open by hand.
+   And consider splitting the large `feat/vulkan-backend` before opening its PR.
 7. **Interaction layer** (selection / transform gizmos / picking) — separate layer on top
    of Actors, deferred until after the robot is solid.
 8. **Vulkan multi-viewport / per-panel offscreen** — needs a real threepp
    `VulkanRenderer::setRenderTarget` (Option B). The current accessor path mirrors a single
    fullscreen render.
+9. **Generic topic-field plotting** — the Topic Plot is currently hard-wired to
+   `/joint_states` positions; a topic/field picker (message introspection) would generalize it.
 
 ## Gotchas / decisions to remember
 - Shared threepp + RTTI (above). ImGui is also single-instance in utsyn_core via
