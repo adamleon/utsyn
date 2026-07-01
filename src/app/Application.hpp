@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
+#include <vector>
 
 #include "LayoutManager.hpp"  // direct member (owns the ImGui ini path string)
 #include "PanelRegistry.hpp"  // direct member (owns panel open-state for the View menu)
@@ -12,6 +14,7 @@ class GLRenderer;
 class PerspectiveCamera;
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
 class VulkanRenderer;
+class RenderTarget;
 struct MouseListener;
 #endif
 } // namespace threepp
@@ -71,9 +74,23 @@ private:
     std::unique_ptr<ImguiContext>         vkUi_;                 // Vulkan ImGui (threepp helper)
     std::unique_ptr<threepp::MouseListener> vkWheel_;           // scroll -> camera zoom
     bool                                  vkStyleApplied_ = false;
-    std::unique_ptr<VkScenePanel>         vkScenePanel_; // scene-color image -> ImGui::Image
-    float                                 vkPanelW_ = 0.0f, vkPanelH_ = 0.0f; // 3D Viewport panel size -> camera aspect
-    bool                                  vkPanelHovered_ = false;            // 3D Viewport panel hovered (wheel zoom)
+    // Multi-viewport (B-lite offscreen render targets): N cameras of the shared
+    // scene (viewport 0's) render into N RenderTargets via VulkanRenderer::
+    // setRenderTarget, each shown in its own docked panel. vkScenePanel_ caches
+    // one ImGui descriptor per viewport (keyed by index); the RT views are stable
+    // for a given panel size.
+    //
+    // The count is set once before run() creates the viewports. Default 2 to show
+    // off multi-viewport; 1 is a single panel with no extra cost. Each viewport adds
+    // a full path-trace + a fence-serialized offscreen submit per frame (see the
+    // acquire-once model in VulkanRenderer), so cost scales ~linearly with N — fine
+    // for a handful of panels, and a natural knob to expose in the UI later.
+    std::size_t                                         numVkViewports_ = 2;
+    std::unique_ptr<VkScenePanel>                       vkScenePanel_;       // per-viewport RT image -> ImGui::Image
+    std::vector<std::unique_ptr<threepp::RenderTarget>> vkTargets_;          // offscreen target per viewport
+    std::vector<Panel*>                                 vkViewportPanels_;   // View-menu entry per viewport ([0]=viewportEntry_)
+    std::vector<float>                                  vkPanelW_, vkPanelH_; // per-viewport panel size -> camera aspect
+    int                                                 vkHoveredViewport_ = -1; // panel under cursor (wheel zoom)
 #endif
     bool                                  useVulkan_ = false;
 

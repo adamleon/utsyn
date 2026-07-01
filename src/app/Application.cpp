@@ -29,10 +29,11 @@
 #include <implot.h>
 
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
-#  include <imgui_impl_vulkan.h> // ImGui_ImplVulkan_AddTexture/RemoveTexture (scene-color -> ImGui::Image)
+#  include <imgui_impl_vulkan.h> // ImGui_ImplVulkan_AddTexture/RemoveTexture (RT image -> ImGui::Image)
 #  include <threepp/cameras/PerspectiveCamera.hpp>
 #  include <threepp/extras/imgui/ImguiContext.hpp>
 #  include <threepp/input/MouseListener.hpp>
+#  include <threepp/renderers/RenderTarget.hpp> // offscreen targets for the Vulkan viewports
 #  include <threepp/renderers/VulkanRenderer.hpp>
 #  include <threepp/scenes/Scene.hpp> // complete type: Scene -> Object3D upcast for render()
 #endif
@@ -58,9 +59,10 @@ struct WheelListener final : threepp::MouseListener {
 };
 } // namespace
 
-// Caches an ImGui_ImplVulkan descriptor per scene-color slot so the rendered scene
-// can be drawn as an ImGui::Image. A slot's descriptor is (re)registered whenever its
-// VkImageView changes — e.g. a window resize recreates the renderer's images.
+// Caches an ImGui_ImplVulkan descriptor per slot (one slot per Vulkan viewport) so a
+// viewport's offscreen RenderTarget image can be drawn as an ImGui::Image. A slot's
+// descriptor is (re)registered whenever its VkImageView changes — e.g. a panel resize
+// recreates that viewport's render-target image.
 struct VkScenePanel {
     VkDevice                     device  = VK_NULL_HANDLE;
     VkSampler                    sampler = VK_NULL_HANDLE;
@@ -181,12 +183,10 @@ void Application::run(bool useVulkan) {
         implotInitialized_ = true;
         layout_.applyImGuiIniPath(); // stable ini path (before the first frame loads it)
         loadFonts(); // JetBrains Mono into the Vulkan ImGui atlas (ImguiContext sets FontScaleDpi)
-        // Scene-color -> ImGui::Image descriptor cache (uses the renderer's native
-        // device + the ImGui-Vulkan backend that vkUi_ just initialised).
-        vkScenePanel_ = std::make_unique<VkScenePanel>(
-                static_cast<VkDevice>(vkRenderer_->nativeDevice()),
-                vkRenderer_->framesInFlight());
-        Logger::instance().info("Application: Vulkan backend (deferred-hybrid, fullscreen overlay)");
+        // The per-viewport RT descriptor cache (vkScenePanel_) + the offscreen
+        // targets are set up after the viewports are created (below), since their
+        // count drives the descriptor slots.
+        Logger::instance().info("Application: Vulkan backend (deferred-hybrid, offscreen viewports)");
     }
 #else
     if (useVulkan_) {
@@ -222,28 +222,55 @@ void Application::run(bool useVulkan) {
     scene_->bindScene(kPrimaryViewport, vp.scene());
     viewportPanel_ = std::make_unique<ViewportPanel>("3D Viewport", vp);
 
-#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
-    if (useVulkan_) {
-        // Drive camera zoom off threepp's mouse-wheel events (ImGui's io.MouseWheel
-        // doesn't receive the scroll under the Vulkan canvas). Only zoom when the
-        // cursor is over the 3D Viewport panel (set in renderUi).
-        auto wheel = std::make_unique<WheelListener>();
-        wheel->cb  = [this](float dy) {
-            if (vkPanelHovered_) {
-                viewports_->at(0).dolly(dy);
-            }
-        };
-        canvas_->addMouseListener(*wheel);
-        vkWheel_ = std::move(wheel);
-    }
-#endif
-
     // Register the core panels first so they head the View menu; plugins append theirs
     // during initialize() (below).
     statusPanel_   = panels_.add("utsyn", "Core");
     viewportEntry_ = panels_.add("3D Viewport", "Core");
     tfPanel_       = panels_.add("TF Tree", "Core");
     plotPanel_     = panels_.add("Topic Plot", "Core");
+
+#if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
+    if (useVulkan_) {
+        // Multi-viewport (B-lite): N cameras of the shared scene (viewport 0's,
+        // which SceneManager binds so plugins populate it) render into N offscreen
+        // RenderTargets, one docked panel each. Viewport 0 reuses the "3D Viewport"
+        // panel; the rest get their own View-menu entries. Extra viewports supply
+        // only a camera — their own scene_ is unused.
+        if (numVkViewports_ < 1) {
+            numVkViewports_ = 1;
+        }
+        vkViewportPanels_.push_back(viewportEntry_);
+        for (std::size_t i = 1; i < numVkViewports_; ++i) {
+            Viewport& extra = viewports_->create();
+            // Offset the framing so each panel obviously shows a different camera.
+            extra.orbit(static_cast<float>(i) * 1.9f, 0.35f);
+            vkViewportPanels_.push_back(
+                    panels_.add("3D Viewport " + std::to_string(i + 1), "Core"));
+        }
+        vkTargets_.resize(numVkViewports_);
+        vkPanelW_.assign(numVkViewports_, 0.0f);
+        vkPanelH_.assign(numVkViewports_, 0.0f);
+
+        // Per-viewport RT-image -> ImGui descriptor cache (renderer's native device +
+        // the ImGui-Vulkan backend vkUi_ initialised). One descriptor slot per viewport.
+        vkScenePanel_ = std::make_unique<VkScenePanel>(
+                static_cast<VkDevice>(vkRenderer_->nativeDevice()),
+                static_cast<uint32_t>(numVkViewports_));
+
+        // Drive camera zoom off threepp's mouse-wheel events (ImGui's io.MouseWheel
+        // doesn't receive the scroll under the Vulkan canvas). Zoom the viewport whose
+        // panel is hovered (set in renderUi).
+        auto wheel = std::make_unique<WheelListener>();
+        wheel->cb  = [this](float dy) {
+            if (vkHoveredViewport_ >= 0 &&
+                static_cast<std::size_t>(vkHoveredViewport_) < viewports_->count()) {
+                viewports_->at(static_cast<std::size_t>(vkHoveredViewport_)).dolly(dy);
+            }
+        };
+        canvas_->addMouseListener(*wheel);
+        vkWheel_ = std::move(wheel);
+    }
+#endif
 
     // TF frame graph + its tree panel. With ROS it subscribes to /tf + /tf_static;
     // offline it shows a demo tree so the panel is still usable.
@@ -416,40 +443,60 @@ void Application::frame() {
 
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
 void Application::frameVulkan() {
-    Viewport& vp = viewports_->at(0);
-
     // dt is the previous frame's value (ImGui updates it during ImguiContext::
     // render()'s NewFrame, which runs below) — fine for plugin scene updates.
     const float dt = ImGui::GetIO().DeltaTime;
 
     broker_->pump();
     plugins_->onSceneUpdate(dt);
-    for (std::size_t i = 0; i < viewports_->count(); ++i) {
+    const std::size_t n = viewports_->count();
+    for (std::size_t i = 0; i < n; ++i) {
         viewports_->at(i).update(dt);
     }
 
-    // Camera navigation is driven by the "3D Viewport" panel (renderUi, below) via an
-    // InvisibleButton over the scene image — the same gestures as the GL ViewportPanel.
+    // Shared scene: every camera renders viewport 0's scene (plugins populate it via
+    // SceneManager / kPrimaryViewport). Each viewport contributes only its camera +
+    // its offscreen RenderTarget.
+    threepp::Scene& shared = viewports_->at(0).scene();
 
-    // Match the camera aspect to that panel so the scene fills it without distortion.
-    // The panel size is measured in renderUi() (which runs below, inside vkUi_->
-    // render()), so this uses last frame's value — one frame of lag. Fall back to the
-    // window aspect until the panel has been drawn once.
-    float aspect = 0.0f;
-    if (vkPanelW_ > 0.0f && vkPanelH_ > 0.0f) {
-        aspect = vkPanelW_ / vkPanelH_;
-    } else if (const auto sz = vkRenderer_->size(); sz.height() > 0) {
-        aspect = static_cast<float>(sz.width()) / static_cast<float>(sz.height());
-    }
-    if (aspect > 0.0f) {
-        vp.camera().aspect = aspect;
-        vp.camera().updateProjectionMatrix();
+    // Size each RenderTarget to its panel (measured last frame in renderUi) and set
+    // the matching camera aspect. One frame of lag until a panel is first drawn — fall
+    // back to the window size so the initial frame isn't degenerate.
+    for (std::size_t i = 0; i < n; ++i) {
+        int pw = (i < vkPanelW_.size() && vkPanelW_[i] > 1.0f) ? static_cast<int>(vkPanelW_[i]) : 0;
+        int ph = (i < vkPanelH_.size() && vkPanelH_[i] > 1.0f) ? static_cast<int>(vkPanelH_[i]) : 0;
+        if (pw <= 0 || ph <= 0) {
+            const auto sz = vkRenderer_->size();
+            pw = sz.width() > 0 ? sz.width() : 1;
+            ph = sz.height() > 0 ? sz.height() : 1;
+        }
+        if (!vkTargets_[i]) {
+            vkTargets_[i] = threepp::RenderTarget::create(
+                    static_cast<unsigned int>(pw), static_cast<unsigned int>(ph),
+                    threepp::RenderTarget::Options{});
+        } else if (static_cast<int>(vkTargets_[i]->width) != pw ||
+                   static_cast<int>(vkTargets_[i]->height) != ph) {
+            vkTargets_[i]->setSize(static_cast<unsigned int>(pw), static_cast<unsigned int>(ph));
+        }
+        auto& cam  = viewports_->at(i).camera();
+        cam.aspect = static_cast<float>(pw) / static_cast<float>(ph);
+        cam.updateProjectionMatrix();
     }
 
-    // Render the primary viewport's scene fullscreen (deferred-hybrid).
-    // vkUi_->render() builds the panels (renderUi) and the renderer's overlay
-    // callback draws them on top, inside the present pass.
-    vkRenderer_->render(vp.scene(), vp.camera());
+    // Render each camera into its offscreen RenderTarget — the renderer blits the
+    // composited color into the RT's image and does NOT present (acquire-once model:
+    // one swapchain image acquired per frame, reused across cameras, presented once).
+    for (std::size_t i = 0; i < n; ++i) {
+        vkRenderer_->setRenderTarget(vkTargets_[i].get());
+        vkRenderer_->render(shared, viewports_->at(i).camera());
+    }
+    // Final on-screen render (viewport 0, no RT): this is the single present for the
+    // frame; its ImGui overlay (vkUi_->render, below) samples all the RTs above.
+    vkRenderer_->setRenderTarget(nullptr);
+    vkRenderer_->render(shared, viewports_->at(0).camera());
+
+    // vkUi_->render() builds the panels (renderUi) and the renderer's overlay callback
+    // draws them on top of the surface present.
     vkUi_->render();
 
     // ImguiContext::render() resets ImGuiStyle on its first call (DPI setup), which
@@ -463,9 +510,9 @@ void Application::frameVulkan() {
 
 void Application::renderUi() {
     // Full-window dockspace so panels dock against the edges. The dockspace is opaque:
-    // under Vulkan it hides the fullscreen scene present, which is shown instead in the
-    // dockable "3D Viewport" panel (below) via the scene-color accessor; under GL the
-    // docked viewport renders directly.
+    // under Vulkan it covers the single fullscreen surface present (viewport 0's scene);
+    // the 3D views are shown instead in the dockable "3D Viewport" panel(s) below, each
+    // sampling its own offscreen RenderTarget. Under GL the docked viewport renders directly.
     ImGui::DockSpaceOverViewport();
 
     if (ImGui::BeginMainMenuBar()) {
@@ -508,54 +555,70 @@ void Application::renderUi() {
         ImGui::End();
     }
 
-    // Docked offscreen viewport — GL only (under Vulkan the scene renders fullscreen).
+    // Docked offscreen viewport — GL only (the Vulkan path draws its per-viewport
+    // RenderTarget panels in the branch below).
     if (!useVulkan_ && viewportEntry_->open) {
         viewportPanel_->onImGui(*glRenderer_, &viewportEntry_->open);
     }
 #if defined(UTSYN_WITH_VULKAN) && UTSYN_WITH_VULKAN
-    // Under Vulkan the renderer can't render to an offscreen target, but it exposes
-    // the per-frame scene-color image — draw it as a dockable "3D Viewport" panel via
-    // the threepp nativeSceneColorView() accessor.
-    if (useVulkan_ && vkScenePanel_ && vkRenderer_ && viewportEntry_->open) {
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-        const bool open = ImGui::Begin("3D Viewport", &viewportEntry_->open);
-        ImGui::PopStyleVar();
-        bool hovered = false;
-        if (open) {
-            const uint32_t    slot  = vkRenderer_->currentSceneColorSlot();
-            const auto        view  = static_cast<VkImageView>(vkRenderer_->nativeSceneColorView(slot));
-            const ImTextureID tex   = vkScenePanel_->texture(slot, view);
-            const ImVec2      avail = ImGui::GetContentRegionAvail();
-            vkPanelW_ = avail.x; // drives the camera aspect in frameVulkan (next frame)
-            vkPanelH_ = avail.y;
-            if (tex && avail.x > 1.0f && avail.y > 1.0f) {
-                const ImVec2 origin = ImGui::GetCursorScreenPos();
-                ImGui::Image(tex, avail);
-                // Camera input: an InvisibleButton over the image (mirrors the GL
-                // ViewportPanel). orbit/pan run here in renderUi (one frame before the
-                // next render); zoom is the threepp wheel listener gated on hover.
-                ImGui::SetCursorScreenPos(origin);
-                ImGui::InvisibleButton("##vk_viewport_nav", avail,
-                                       ImGuiButtonFlags_MouseButtonLeft |
-                                               ImGuiButtonFlags_MouseButtonRight |
-                                               ImGuiButtonFlags_MouseButtonMiddle);
-                hovered = ImGui::IsItemHovered();
-                if (ImGui::IsItemActive()) {
-                    Viewport&    vp = viewports_->at(0);
-                    const ImVec2 d  = ImGui::GetIO().MouseDelta;
-                    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                        vp.orbit(-d.x * 0.01f, -d.y * 0.01f); // left drag: orbit
-                    } else if (ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
-                               ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
-                        vp.pan(d.x, d.y); // right/middle drag: pan
-                    }
-                }
-            } else if (!tex) {
-                ImGui::TextDisabled("scene-color image not available");
+    // Under Vulkan each viewport's camera is rendered into its own offscreen
+    // RenderTarget (frameVulkan, via setRenderTarget); draw one dockable panel per
+    // viewport sampling that RT's image through nativeRenderTargetImageView().
+    if (useVulkan_ && vkScenePanel_ && vkRenderer_) {
+        vkHoveredViewport_ = -1;
+        const std::size_t n = viewports_->count();
+        for (std::size_t i = 0; i < n; ++i) {
+            Panel* entry = (i < vkViewportPanels_.size()) ? vkViewportPanels_[i] : nullptr;
+            if (entry && !entry->open) {
+                continue;
             }
+            const std::string title = entry ? entry->name : ("3D Viewport " + std::to_string(i + 1));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            const bool open = ImGui::Begin(title.c_str(), entry ? &entry->open : nullptr);
+            ImGui::PopStyleVar();
+            if (open) {
+                threepp::RenderTarget* rt =
+                        (i < vkTargets_.size()) ? vkTargets_[i].get() : nullptr;
+                const auto view = static_cast<VkImageView>(
+                        rt ? vkRenderer_->nativeRenderTargetImageView(rt) : nullptr);
+                const ImTextureID tex   = vkScenePanel_->texture(static_cast<uint32_t>(i), view);
+                const ImVec2      avail = ImGui::GetContentRegionAvail();
+                if (i < vkPanelW_.size()) {
+                    vkPanelW_[i] = avail.x; // drives this viewport's RT size + aspect (next frame)
+                    vkPanelH_[i] = avail.y;
+                }
+                if (tex && avail.x > 1.0f && avail.y > 1.0f) {
+                    const ImVec2 origin = ImGui::GetCursorScreenPos();
+                    // Vulkan RT images have a top-left origin, so no V-flip (unlike GL).
+                    ImGui::Image(tex, avail);
+                    // Camera input: an InvisibleButton over the image (mirrors the GL
+                    // ViewportPanel), routed to THIS viewport. orbit/pan run here in
+                    // renderUi (one frame before the next render); zoom is the threepp
+                    // wheel listener gated on the hovered viewport.
+                    ImGui::SetCursorScreenPos(origin);
+                    ImGui::InvisibleButton("##vk_viewport_nav", avail,
+                                           ImGuiButtonFlags_MouseButtonLeft |
+                                                   ImGuiButtonFlags_MouseButtonRight |
+                                                   ImGuiButtonFlags_MouseButtonMiddle);
+                    if (ImGui::IsItemHovered()) {
+                        vkHoveredViewport_ = static_cast<int>(i);
+                    }
+                    if (ImGui::IsItemActive()) {
+                        Viewport&    vp = viewports_->at(i);
+                        const ImVec2 d  = ImGui::GetIO().MouseDelta;
+                        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                            vp.orbit(-d.x * 0.01f, -d.y * 0.01f); // left drag: orbit
+                        } else if (ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
+                                   ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+                            vp.pan(d.x, d.y); // right/middle drag: pan
+                        }
+                    }
+                } else if (!tex) {
+                    ImGui::TextDisabled("render target not available");
+                }
+            }
+            ImGui::End();
         }
-        vkPanelHovered_ = hovered;
-        ImGui::End();
     }
 #endif
 
