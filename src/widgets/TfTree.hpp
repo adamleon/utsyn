@@ -18,6 +18,9 @@ public:
 private:
     // Frames the user has collapsed (default state is expanded, i.e. not in the set).
     std::set<std::string> collapsed_;
+    // false: each frame relative to its parent (raw /tf). true: composed to the world/root
+    // frame (absolute pose).
+    bool absolute_ = false;
 };
 
 } // namespace utsyn

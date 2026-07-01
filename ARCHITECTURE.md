@@ -140,7 +140,7 @@ Status legend below: STUB = compiles, no functionality yet; BUILT = implemented.
 | IPlugin | src/plugins/IPlugin | BUILT | Plugin contract (interface) + UTSYN_PLUGIN_ABI_VERSION sentinel |
 | PluginLoader | src/plugins/PluginLoader | BUILT | Loads plugin_*.dll/.so, resolves entry points, ABI-checks, drives lifecycle, ordered unload |
 | TopicPlot | src/widgets/TopicPlot | STUB | ImPlot-based real-time topic monitor panel |
-| TfTree | src/widgets/TfTree | BUILT | ASCII/terminal TF frame-tree panel ([+]/[-] markers, dash-rule header, green=dynamic/grey=static) rendering a TfListener snapshot: monospace-aligned x/y/z (m) + roll/pitch/yaw (deg, from the quaternion, so joint motion is visible). Core panel in the View menu |
+| TfTree | src/widgets/TfTree | BUILT | ASCII/terminal TF frame-tree panel ([+]/[-] markers, dash-rule header, green=dynamic/grey=static) rendering a TfListener snapshot: monospace-aligned x/y/z (m) + roll/pitch/yaw (deg). A relative/absolute toggle composes each frame down the chain to the world frame. Core panel in the View menu |
 | ViewportPanel | src/widgets/ViewportPanel | BUILT | ImGui panel embedding a Viewport's render texture |
 | MessageMonitor | src/widgets/MessageMonitor | BUILT | Reusable per-topic streaming-feedback widget plugins embed (one collapsible block per topic; addRow + bind<Msg>) |
 | Theme | src/app/Theme | BUILT | Named status colors (StatusLive/Stale/Error/Idle) for the terminal palette |

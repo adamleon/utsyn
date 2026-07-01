@@ -34,11 +34,39 @@ void quatToRpyDeg(const TfTransform& t, double& roll, double& pitch, double& yaw
     yaw                   = std::atan2(sinyCosp, cosyCosp) * kRadToDeg;
 }
 
+// Rotate the vector (vx,vy,vz) by q's quaternion (only q's rotation fields are read).
+void rotateByQuat(const TfTransform& q, double vx, double vy, double vz, double& ox, double& oy,
+                  double& oz) {
+    const double tx = 2.0 * (q.qy * vz - q.qz * vy);
+    const double ty = 2.0 * (q.qz * vx - q.qx * vz);
+    const double tz = 2.0 * (q.qx * vy - q.qy * vx);
+    ox              = vx + q.qw * tx + (q.qy * tz - q.qz * ty);
+    oy              = vy + q.qw * ty + (q.qz * tx - q.qx * tz);
+    oz              = vz + q.qw * tz + (q.qx * ty - q.qy * tx);
+}
+
+// Compose transform a (world->parent) with b (parent->child) => world->child.
+TfTransform compose(const TfTransform& a, const TfTransform& b) {
+    TfTransform c;
+    // rotation: c.q = a.q * b.q
+    c.qw = a.qw * b.qw - a.qx * b.qx - a.qy * b.qy - a.qz * b.qz;
+    c.qx = a.qw * b.qx + a.qx * b.qw + a.qy * b.qz - a.qz * b.qy;
+    c.qy = a.qw * b.qy - a.qx * b.qz + a.qy * b.qw + a.qz * b.qx;
+    c.qz = a.qw * b.qz + a.qx * b.qy - a.qy * b.qx + a.qz * b.qw;
+    // translation: c.t = a.t + rotate(a.q, b.t)
+    double rx = 0.0, ry = 0.0, rz = 0.0;
+    rotateByQuat(a, b.tx, b.ty, b.tz, rx, ry, rz);
+    c.tx = a.tx + rx;
+    c.ty = a.ty + ry;
+    c.tz = a.tz + rz;
+    return c;
+}
+
 // Recursively render `name` and its children as ASCII/terminal rows: an indented
 // [+]/[-] marker + name in a fixed-width column, then monospace-aligned x/y/z. Green =
 // dynamic frame, grey = static; roots without a transform (e.g. "world") stay neutral.
 void drawFrameRow(const TfListener::Snapshot& snap, const std::string& name, int depth,
-                  std::set<std::string>& collapsed) {
+                  std::set<std::string>& collapsed, bool absolute, const TfTransform& parentWorld) {
     const auto childrenIt  = snap.children.find(name);
     const bool hasChildren = childrenIt != snap.children.end() && !childrenIt->second.empty();
     const auto frameIt     = snap.frames.find(name);
@@ -53,9 +81,13 @@ void drawFrameRow(const TfListener::Snapshot& snap, const std::string& name, int
 
     // One full-width row string. "###name" is a stable id so the text can change each
     // frame (live transforms) without the row losing its click/hover identity.
-    char row[256];
+    // Accumulate this frame's world pose so children can compose from it and absolute
+    // mode can display it (parentWorld is identity at the roots).
+    TfTransform world = parentWorld;
+    char        row[256];
     if (hasTf) {
-        const TfTransform& t = frameIt->second.transform;
+        world                   = compose(parentWorld, frameIt->second.transform);
+        const TfTransform& t    = absolute ? world : frameIt->second.transform;
         double             roll = 0.0, pitch = 0.0, yaw = 0.0;
         quatToRpyDeg(t, roll, pitch, yaw);
         std::snprintf(row, sizeof(row), "%-*s %6.2f %6.2f %6.2f %6.1f %6.1f %6.1f###%s", kNameCol,
@@ -74,10 +106,10 @@ void drawFrameRow(const TfListener::Snapshot& snap, const std::string& name, int
     }
 
     if (hasTf && ImGui::IsItemHovered()) {
-        const TfFrame& f = frameIt->second;
-        ImGui::SetTooltip("parent: %s\nquat:   %.3f %.3f %.3f %.3f%s", f.parent.c_str(),
-                          f.transform.qx, f.transform.qy, f.transform.qz, f.transform.qw,
-                          isStatic ? "\nstatic" : "");
+        const TfTransform& t = absolute ? world : frameIt->second.transform;
+        ImGui::SetTooltip("parent: %s\n%s quat: %.3f %.3f %.3f %.3f%s",
+                          frameIt->second.parent.c_str(), absolute ? "world" : "rel", t.qx, t.qy,
+                          t.qz, t.qw, isStatic ? "\nstatic" : "");
     }
     if (clicked && hasChildren) {
         if (expanded) {
@@ -90,7 +122,7 @@ void drawFrameRow(const TfListener::Snapshot& snap, const std::string& name, int
 
     if (expanded && hasChildren) {
         for (const auto& child : childrenIt->second) {
-            drawFrameRow(snap, child, depth + 1, collapsed);
+            drawFrameRow(snap, child, depth + 1, collapsed, absolute, world);
         }
     }
 }
@@ -111,16 +143,19 @@ void TfTree::onImGui(const TfListener& tf, bool* pOpen) {
         return;
     }
 
-    ImGui::TextDisabled("%llu transform(s)   xyz = m, rpy = deg   ([-]/[+] collapse)",
-                        static_cast<unsigned long long>(snap.frames.size()));
+    ImGui::Checkbox("absolute (world frame)", &absolute_);
+    ImGui::TextDisabled("%llu transform(s)   %s   xyz = m, rpy = deg",
+                        static_cast<unsigned long long>(snap.frames.size()),
+                        absolute_ ? "world-absolute" : "relative to parent");
     char header[160];
     std::snprintf(header, sizeof(header), "%-*s %6s %6s %6s %6s %6s %6s", kNameCol, "frame", "x",
                   "y", "z", "roll", "pitch", "yaw");
     ImGui::TextDisabled("%s", header);
     ui::dashRule();
 
+    const TfTransform identity{}; // world -> root
     for (const auto& root : snap.roots) {
-        drawFrameRow(snap, root, 0, collapsed_);
+        drawFrameRow(snap, root, 0, collapsed_, absolute_, identity);
     }
     ImGui::End();
 }
