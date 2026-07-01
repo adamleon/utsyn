@@ -163,6 +163,7 @@ void Application::run(bool useVulkan) {
         // is a no-op: panels can't dock and the central node has no rect (which the
         // camera gate needs). The GL path is unaffected.
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        loadFonts(); // JetBrains Mono into the Vulkan ImGui atlas (ImguiContext sets FontScaleDpi)
         // Scene-color -> ImGui::Image descriptor cache (uses the renderer's native
         // device + the ImGui-Vulkan backend that vkUi_ just initialised).
         vkScenePanel_ = std::make_unique<VkScenePanel>(
@@ -251,16 +252,36 @@ void Application::initImGui() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-    // TODO: load assets/fonts/JetBrainsMono-Regular.ttf at 16px * dpiScale once
-    // the font asset is added (see CLAUDE.md). Until then use the default font,
-    // scaled for DPI.
-    io.FontGlobalScale = dpiScale_;
+    loadFonts(); // JetBrains Mono — the terminal aesthetic
+    // Crisp DPI scaling via ImGui's dynamic-font rasterization (re-rasterizes the font
+    // at the scaled size), not FontGlobalScale (which stretches the bitmap and blurs).
+    // The Vulkan path's ImguiContext sets this same field itself.
+    ImGui::GetStyle().FontScaleDpi = dpiScale_;
 
     ImGui_ImplGlfw_InitForOpenGL(
             static_cast<GLFWwindow*>(canvas_->windowPtr()), true);
     ImGui_ImplOpenGL3_Init("#version 330 core");
 
     imguiInitialized_ = true;
+}
+
+void Application::loadFonts() {
+#ifdef UTSYN_ASSET_DIR
+    ImGuiIO&    io   = ImGui::GetIO();
+    const char* path = UTSYN_ASSET_DIR "/fonts/JetBrainsMono-Regular.ttf";
+    // Base 16px; ImGui's FontScaleDpi re-rasterizes crisply per DPI. Called from both
+    // initImGui (GL) and run() (Vulkan) after the ImGui context exists but before the
+    // first frame builds the atlas.
+    ImFont* font = io.Fonts->AddFontFromFileTTF(path, 16.0f);
+    if (font != nullptr) {
+        io.FontDefault = font;
+        Logger::instance().info("Application: loaded JetBrains Mono");
+    } else {
+        Logger::instance().warn(std::string("Application: failed to load font: ") + path);
+    }
+#else
+    Logger::instance().warn("Application: UTSYN_ASSET_DIR undefined; using default ImGui font");
+#endif
 }
 
 void Application::applyTerminalStyle() {

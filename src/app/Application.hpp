@@ -48,6 +48,7 @@ public:
 
 private:
     void initImGui();
+    void loadFonts(); // add JetBrains Mono to the ImGui atlas (shared by GL + Vulkan)
     void applyTerminalStyle();
     void frame();      // one render-loop iteration (dispatches GL vs Vulkan)
     void renderUi();   // build the ImGui frame (dockspace, panels, plugin UI)

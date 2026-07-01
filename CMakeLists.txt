@@ -255,6 +255,12 @@ endif()
 target_link_libraries(utsyn_core PUBLIC ${CMAKE_DL_LIBS})
 target_link_libraries(utsyn_core PRIVATE utsyn_warnings)
 
+# Absolute path to the source assets dir (fonts, etc.) baked in, so the running exe
+# finds them regardless of CWD or which build tree it runs from. Dev-oriented;
+# packaging uses install(DIRECTORY assets/ ...) below.
+target_compile_definitions(utsyn_core PRIVATE
+    UTSYN_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+
 # Vulkan backend defines. UTSYN_WITH_VULKAN (PUBLIC) gates utsyn's own code +
 # Application.hpp member layout (app + plugins must agree). THREEPP_WITH_VULKAN
 # (PRIVATE — only Application.cpp includes the header that needs it) activates the
